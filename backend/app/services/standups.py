@@ -51,6 +51,7 @@ from app.enums import (
 from app.models import (
     ActionItem,
     Blocker,
+    DailyUpdate,
     Decision,
     SessionNote,
     StandupParticipant,
@@ -73,6 +74,7 @@ from app.schemas.standups import (
     SessionDetail,
     SessionHistoryEntry,
     SessionNoteOut,
+    SessionOutcomes,
     SessionSummaryOut,
     UserStandupHistory,
 )
@@ -83,7 +85,10 @@ from app.schemas.tasks import (
     TaskPatch,
     TaskUpdateCreate,
 )
+from app.schemas.today import DailyUpdateOut
+from app.services.attention import attention_score, exception_reasons
 from app.services.audit import record_event
+from app.services.daily_updates import get_for_user_date
 from app.services.tasks import (
     add_task_update,
     create_action_item,
@@ -210,6 +215,14 @@ def session_detail(db: Session, user: User, session_id: str) -> SessionDetail:
     blocker_counts, action_counts = _per_participant_open_counts(
         db, [p.user_id for p in participants]
     )
+    daily_user_ids = set(
+        db.scalars(
+            select(DailyUpdate.user_id).where(
+                DailyUpdate.user_id.in_([p.user_id for p in participants]),
+                DailyUpdate.update_date == session.session_date,
+            )
+        ).all()
+    )
     return SessionDetail(
         **base.model_dump(),
         participants=[
@@ -217,6 +230,7 @@ def session_detail(db: Session, user: User, session_id: str) -> SessionDetail:
                 p,
                 open_blocker_count=blocker_counts.get(p.user_id, 0),
                 open_action_item_count=action_counts.get(p.user_id, 0),
+                has_daily_update=p.user_id in daily_user_ids,
             )
             for p in participants
         ],
@@ -552,16 +566,9 @@ def build_workspace(
 
     for task in tasks:
         card = workspace_task(task)
-        score = 0
-        if card.open_blockers:
-            score += 100
-        if card.is_overdue:
-            score += 50
-        if task.is_at_risk:
-            score += 30
-        if card.open_action_items:
-            score += 10
-        if score:
+        reasons = exception_reasons(task)
+        score = attention_score(reasons)
+        if reasons:
             needs_attention.append(card)
             attention_scores[task.id] = score
         elif task.status not in TaskStatus.closed_statuses() and (
@@ -586,6 +593,7 @@ def build_workspace(
 
     open_blockers = _carried_blockers(db, user_id)
     open_actions = _carried_actions(db, user_id)
+    daily = get_for_user_date(db, user_id, session.session_date)
 
     recent_updates = list(
         db.scalars(
@@ -632,7 +640,9 @@ def build_workspace(
             participant,
             open_blocker_count=len(open_blockers),
             open_action_item_count=len(open_actions),
+            has_daily_update=daily is not None,
         ),
+        daily_update=DailyUpdateOut.model_validate(daily) if daily else None,
         needs_attention=needs_attention,
         active=active,
         other=other,
@@ -654,7 +664,11 @@ def _carried_blockers(db: Session, user_id: str) -> list[Blocker]:
         .outerjoin(Task, Blocker.task_id == Task.id)
         .where(
             Blocker.status == BlockerStatus.OPEN,
-            or_(Blocker.owner_id == user_id, Task.assignee_id == user_id),
+            or_(
+                Blocker.owner_id == user_id,
+                Blocker.reported_by_id == user_id,
+                Task.assignee_id == user_id,
+            ),
         )
         .order_by(Blocker.created_at.asc())
     )
@@ -726,7 +740,6 @@ def capture_blocker(db: Session, user: User, session_id: str, payload: MeetingBl
         ),
         session_id=session.id,
         audit_source=AuditSource.MANAGER_ACTION,
-        attributed_to_user_id=payload.attributed_to_user_id,
     )
     return blocker_out(blocker)
 
@@ -936,6 +949,68 @@ def session_captures(db: Session, user: User, session_id: str) -> SessionCapture
         action_items=[action_item_out(a) for a in action_items],
         decisions=[decision_out(d) for d in decisions],
         notes=[SessionNoteOut.model_validate(n) for n in notes],
+    )
+
+
+def session_outcomes(db: Session, user: User, session_id: str) -> SessionOutcomes:
+    """Outcome-first view: actions, unresolved help, decisions."""
+    session = get_session_or_404(db, session_id)
+    ensure_session_visible(user, session)
+    participant_ids = [participant.user_id for participant in session.participants]
+
+    action_items = list(
+        db.scalars(
+            select(ActionItem)
+            .options(selectinload(ActionItem.task), selectinload(ActionItem.owner))
+            .where(ActionItem.session_id == session.id)
+            .order_by(ActionItem.created_at.asc())
+        ).all()
+    )
+    decisions = list(
+        db.scalars(
+            select(Decision)
+            .options(
+                selectinload(Decision.task),
+                selectinload(Decision.decided_by),
+                selectinload(Decision.responsible_user),
+            )
+            .where(Decision.session_id == session.id)
+            .order_by(Decision.created_at.asc())
+        ).all()
+    )
+
+    blocker_stmt = (
+        select(Blocker)
+        .options(
+            selectinload(Blocker.task),
+            selectinload(Blocker.owner),
+            selectinload(Blocker.reported_session),
+        )
+        .outerjoin(Task, Blocker.task_id == Task.id)
+        .where(Blocker.status == BlockerStatus.OPEN)
+        .where(
+            or_(
+                Blocker.reported_session_id == session.id,
+                Task.assignee_id.in_(participant_ids),
+                Blocker.owner_id.in_(participant_ids),
+            )
+        )
+    )
+    blockers: dict[str, Blocker] = {}
+    for blocker in db.scalars(blocker_stmt).unique().all():
+        blockers[blocker.id] = blocker
+
+    updates_count = db.scalar(
+        select(func.count(TaskUpdate.id)).where(TaskUpdate.session_id == session.id)
+    ) or 0
+
+    return SessionOutcomes(
+        action_items=[action_item_out(item) for item in action_items],
+        unresolved_blockers=[carried_blocker(blocker) for blocker in blockers.values()],
+        decisions=[decision_out(decision) for decision in decisions],
+        updates_count=updates_count,
+        participant_count=len(session.participants),
+        reviewed_count=sum(1 for p in session.participants if p.reviewed_at),
     )
 
 

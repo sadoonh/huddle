@@ -2,7 +2,16 @@
 
 ## 1. Context
 
-The application is an internal tool for a small analytics team. It must feel like part of the **nex** portal (shared SSO, shared hosting), not a separate product with its own login. The workload is low-volume, read-heavy during a 15–30 minute standup, with short write bursts. The primary experience is the Live Standup Workspace.
+The application is an internal tool for a small analytics team. It must feel like part of the **nex** portal (shared SSO, shared hosting), not a separate product with its own login. The workload is low-volume, read-heavy during a 15–30 minute standup, with short write bursts.
+
+The daily product is deliberately small:
+
+- **Today** — what needs attention, a short personal work preview, and one optional update composer.
+- **Work** — a searchable task list with shared task detail; not a planning suite.
+- **Focused standup** — a navigation-free meeting mode entered from Today, with a compact person selector and contextual capture drawer.
+- **Outcomes** — actions, unresolved help and decisions, with bookkeeping collapsed.
+
+Intake, transcript review, project settings and the legacy board are pilot/contextual tools. Primary navigation has two destinations.
 
 Constraints from the brief:
 
@@ -18,7 +27,7 @@ Constraints from the brief:
 ```mermaid
 flowchart TB
   subgraph Browser
-    SPA[React SPA<br/>three-panel workspace]
+    SPA[React SPA<br/>Today · Work · focused meeting]
   end
   subgraph nex
     Portal[nex portal<br/>SSO + hosting]
@@ -116,6 +125,15 @@ Project visibility also considers ownership and `project_members`. Task visibili
 
 ## 5. Standup workflow
 
+### 5.0 Daily updates and durable help
+
+Today writes two kinds of input without requiring a meeting:
+
+- **Daily update** — one optional `daily_updates` row per user per day. `PUT /daily-updates/today` upserts, so retries update rather than duplicate. The meeting workspace reads the participant's update for the session date.
+- **Help request** — “Needs help” creates a Blocker, task-linked or team-wide. Employees may create either (with project visibility enforced). It is durable and carries forward; it is not stored only as participant text.
+
+Task-specific updates use the existing append-only task update endpoint with source `task_interface`, so they appear in the meeting's recent updates without a second submission.
+
 ### 5.1 Session lifecycle
 
 ```text
@@ -125,41 +143,43 @@ draft ──start──▶ in_progress ──complete──▶ completed
 - One session per calendar date (`unique(session_date)`).
 - Creating a session snapshots participants (`standup_participants`), skipping admins and users with `standup_eligible=false`.
 - `start` sets `started_at`; `complete` sets `ended_at`, generates a structured summary and writes audit. Completion never resolves blockers or closes action items.
-- The live workspace auto-starts a draft session when the facilitator opens it, but pre-meeting submissions remain open until each participant is reviewed. This makes late arrivals practical without losing the meeting timeline.
+- The focused meeting auto-starts a draft session when the facilitator opens it. Daily updates are independent of the session and remain visible for the session date; the legacy pre-meeting API also stays open until the participant is reviewed.
 
-### 5.2 Exception-first classification
+### 5.2 Shared attention ordering
 
-For the selected employee, tasks are loaded with their project, updates, blockers and action items, then grouped:
+`app/services/attention.py` defines one exception vocabulary and severity order used by both Today and the meeting workspace:
 
-1. **Needs attention** — any open blocker, overdue task, `is_at_risk`, or open action item. Sorted by a severity score (blocked 100, overdue 50, at-risk 30, follow-up 10).
-2. **Active** — `in_progress` or due within `UPCOMING_DUE_DAYS` (default 3), excluding closed tasks.
-3. **Other** — everything else, including backlog and recently closed work; collapsed by default.
+1. open blocker / help request — 100
+2. overdue — 80
+3. explicitly at risk — 60
+4. open follow-up — 50
 
-The API returns all three groups plus carried-forward blockers/action items and recent updates/decisions, so the workspace renders from one request per employee.
+A task is returned once with all applicable reasons; the leading reason drives the row label and the rest are disclosed as additional issues. Taskless blockers/follow-ups and blockers on closed tasks get their own rows so deduplication cannot hide them. `/today` paginates the full set used by the dashboard; the workspace uses the same classifier for its needs/active/other groups.
 
 ### 5.3 Carry-forward
 
 Carry-forward is **query-driven**, not copied:
 
 ```text
-open blocker  → status = 'open' AND (owner = employee OR task.assignee = employee)
+open blocker  → status = 'open' AND (owner = employee OR reported_by = employee OR task.assignee = employee)
 open action   → status = 'open' AND (owner = employee OR task.assignee = employee)
 ```
 
 They keep their `reported_session_id` / `session_id` origin, so history can answer “when was this first raised?”. Ending a session does not mutate them. Resolving/completing removes them from later workspaces automatically. This avoids duplicate records and guarantees continuity.
 
-### 5.4 Capture context
+### 5.4 Focused meeting and capture context
 
-Meeting capture endpoints are scoped by session:
+The meeting route (`/standups/:id/live`) is rendered outside the global layout. The UI has one main workspace, a compact person selector with a roster dialog, one review count and one Finish action. Capture is a contextual drawer rather than a permanent tabbed column:
 
 - `POST /standups/sessions/{id}/updates` creates an append-only `TaskUpdate` with `source=standup`, `session_id`, author = manager, `attributed_to_user_id` = selected employee.
-- blockers/action items/decisions inherit `session_id`; owners default to the selected employee on the client.
-- Notes are stored as `session_notes` for free text that does not belong in a structured record.
+- blockers/action items/decisions inherit `session_id`. Owners are explicitly selected where relevant; the UI does not silently infer who can resolve a blocker.
+- Notes are stored as `session_notes`.
 - Every capture writes an audit event with `source=manager_action` and the session id.
+- Switching participants while a draft exists prompts before discarding it; “Reviewed & next” marks only the current participant and advances.
 
-### 5.5 Completion summary
+### 5.5 Outcome-first history
 
-The summary is deterministic and built from rows, not from an LLM: participants reviewed, progress update count, blockers reported/resolved, action items created/open, decisions, carried-forward blocker count and unreviewed names. It is stored on `standup_sessions.summary` and also returned by `GET .../summary`.
+The session page leads with Next actions, Unresolved help needed and Decisions from `GET .../outcomes`. Progress records, participant reporting, facts/notes and audit are collapsed details. The stored deterministic summary remains available in the facts section. Outcomes distinguish “recorded in this meeting” from “still open now”; finishing never closes commitments.
 
 ## 6. AI reconciliation pipeline
 

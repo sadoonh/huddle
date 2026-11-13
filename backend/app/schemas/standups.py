@@ -13,6 +13,7 @@ from app.schemas.tasks import (
     TaskOut,
     TaskUpdateOut,
 )
+from app.schemas.today import DailyUpdateOut
 
 
 # ---------------------------------------------------------------------------
@@ -54,10 +55,20 @@ class ParticipantOut(ORMModel):
     follow_up_note: str | None
     open_blocker_count: int = 0
     open_action_item_count: int = 0
+    has_daily_update: bool = False
 
 
 class SessionDetail(SessionOut):
     participants: list[ParticipantOut] = Field(default_factory=list)
+
+
+class SessionOutcomes(ORMModel):
+    action_items: list[ActionItemOut] = Field(default_factory=list)
+    unresolved_blockers: list[CarriedItem] = Field(default_factory=list)
+    decisions: list[DecisionOut] = Field(default_factory=list)
+    updates_count: int = 0
+    participant_count: int = 0
+    reviewed_count: int = 0
 
 
 class PreMeetingTaskUpdate(ORMModel):
@@ -104,6 +115,7 @@ class CarriedItem(ORMModel):
 class ParticipantWorkspace(ORMModel):
     session_id: str
     participant: ParticipantOut
+    daily_update: DailyUpdateOut | None = None
     needs_attention: list[WorkspaceTask] = Field(default_factory=list)
     active: list[WorkspaceTask] = Field(default_factory=list)
     other: list[WorkspaceTask] = Field(default_factory=list)

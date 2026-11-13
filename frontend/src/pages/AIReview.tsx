@@ -349,8 +349,12 @@ function ProposalCard({
             </span>
           )}
         </div>
-        <span className="text-[10px] text-slate-400">
-          {proposal.target_type} {proposal.target_id ? proposal.target_id.slice(0, 8) : '—'}
+        <span className="text-xs text-slate-500">
+          {typeof proposal.current_values?.title === 'string'
+            ? proposal.current_values.title
+            : proposal.target_type === 'session'
+              ? 'This session'
+              : 'Task'}
         </span>
       </div>
 
@@ -382,16 +386,14 @@ function ProposalCard({
 
         <div className="grid gap-3 md:grid-cols-2">
           <div>
-            <p className="label">Current values</p>
-            <pre className="whitespace-pre-wrap break-words rounded-md bg-slate-900 p-2 text-[10px] leading-relaxed text-slate-200">
-              {JSON.stringify(proposal.current_values ?? {}, null, 2)}
-            </pre>
+            <p className="label">Current</p>
+            <ReadableCurrent values={proposal.current_values ?? {}} users={users} />
           </div>
           <div>
             <div className="flex items-center justify-between">
-              <p className="label mb-1">Proposed change</p>
+              <p className="label mb-1">Proposed</p>
               {editable && (
-                <button type="button" className="text-[10px] font-semibold text-emerald-700" onClick={() => setEditing((v) => !v)}>
+                <button type="button" className="text-xs font-semibold text-emerald-700" onClick={() => setEditing((v) => !v)}>
                   {editing ? 'Close editor' : 'Edit'}
                 </button>
               )}
@@ -399,9 +401,7 @@ function ProposalCard({
             {editing && editable ? (
               <ProposalFields operation={proposal.operation} payload={payload} setPayload={setPayload} users={users} />
             ) : (
-              <pre className="whitespace-pre-wrap break-words rounded-md bg-slate-50 p-2 text-[10px] leading-relaxed text-slate-700">
-                {JSON.stringify(payload, null, 2)}
-              </pre>
+              <ReadableProposed operation={proposal.operation} payload={payload} users={users} />
             )}
           </div>
         </div>
@@ -529,6 +529,93 @@ function ProposalFields({
             </option>
           ))}
         </select>
+      )}
+    </div>
+  )
+}
+
+
+function userName(id: unknown, users: User[]): string {
+  if (typeof id !== 'string' || !id) return 'Unassigned'
+  return users.find((user) => user.id === id)?.full_name ?? 'Unknown person'
+}
+
+function ReadableCurrent({ values, users }: { values: Record<string, unknown>; users: User[] }) {
+  const title = typeof values.title === 'string' ? values.title : null
+  const status = typeof values.status === 'string' ? values.status : null
+  const assignee = 'assignee_id' in values ? userName(values.assignee_id, users) : null
+  return (
+    <div className="space-y-1 rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
+      {title && <p><span className="text-slate-500">Task: </span>{title}</p>}
+      {status && <p><span className="text-slate-500">Status: </span>{humanize(status)}</p>}
+      {assignee && <p><span className="text-slate-500">Owner: </span>{assignee}</p>}
+      {!title && !status && !assignee && <p className="text-slate-500">No task state to compare.</p>}
+    </div>
+  )
+}
+
+function ReadableProposed({
+  operation,
+  payload,
+  users,
+}: {
+  operation: string
+  payload: Record<string, unknown>
+  users: User[]
+}) {
+  const description = typeof payload.description === 'string' ? payload.description : ''
+  const owner = 'owner_id' in payload ? userName(payload.owner_id, users) : null
+  const due = typeof payload.due_date === 'string' ? payload.due_date : null
+  const progress = typeof payload.progress === 'string' ? payload.progress : ''
+  const next = typeof payload.next_steps === 'string' ? payload.next_steps : null
+  const rationale = typeof payload.rationale === 'string' ? payload.rationale : null
+  const resolution = typeof payload.resolution_details === 'string' ? payload.resolution_details : ''
+  const assignee = 'assignee_id' in payload ? userName(payload.assignee_id, users) : null
+
+  return (
+    <div className="space-y-2 rounded-lg border border-slate-200 p-3 text-sm text-slate-700">
+      {operation === 'update_task_status' && (
+        <p>Change status to <span className="font-medium">{humanize(String(payload.status ?? ''))}</span>.</p>
+      )}
+      {operation === 'assign_task' && <p>Assign the task to <span className="font-medium">{assignee}</span>.</p>}
+      {operation === 'add_progress_update' && (
+        <>
+          <p className="font-medium">Add a progress update</p>
+          <p>{progress}</p>
+          {next && <p className="text-slate-500">Next: {next}</p>}
+        </>
+      )}
+      {operation === 'create_blocker' && (
+        <>
+          <p className="font-medium">Create a help request</p>
+          <p>{description}</p>
+          <p className="text-slate-500">Who can help: {owner}</p>
+        </>
+      )}
+      {operation === 'resolve_blocker' && (
+        <>
+          <p className="font-medium">Resolve the blocker</p>
+          <p>{resolution || 'No resolution detail supplied.'}</p>
+        </>
+      )}
+      {operation === 'create_action_item' && (
+        <>
+          <p className="font-medium">Create a follow-up</p>
+          <p>{description}</p>
+          <p className="text-slate-500">
+            Owner: {owner}{due ? ` · due ${due}` : ''}
+          </p>
+        </>
+      )}
+      {operation === 'record_decision' && (
+        <>
+          <p className="font-medium">Record a decision</p>
+          <p>{description}</p>
+          {rationale && <p className="text-slate-500">Why: {rationale}</p>}
+        </>
+      )}
+      {!['update_task_status', 'assign_task', 'add_progress_update', 'create_blocker', 'resolve_blocker', 'create_action_item', 'record_decision'].includes(operation) && (
+        <p>{humanize(operation)}</p>
       )}
     </div>
   )

@@ -1,161 +1,194 @@
-# Standup — a standup-first work management app for nex
+# Standup — daily work and a focused standup for nex
 
-> Tasks hold the current state of work. Standups capture progress, decisions, blockers and commitments. History preserves accountability. AI proposes; humans decide.
+> Today answers three questions: what needs attention, what changed, and who is doing what next. The meeting is a focused mode, not a separate product to navigate.
 
-This repository implements the MVP described in the project brief: a lightweight project and task foundation wrapped around the **Daily Standup Workspace**, the application's primary interface.
+This repository implements the **simplified** version of the standup-first application described in the project brief: **Today + Work**, a focused meeting workspace, and outcome-first session history. Intake, transcript reconciliation, project settings and the old Kanban remain available as pilot/legacy tools, but they are no longer part of the default daily experience.
 
-**Status:** Phases 1–2 implemented and verified; Phase 3 (board/intake) delivered lightly; Phase 4 (transcript reconciliation) implemented behind human approval; Phase 5 (Microsoft Graph) intentionally out of scope.
-
-![Live standup workspace](docs/screenshots/live-standup-workspace.png)
+![Today for managers](docs/screenshots/today-manager.png)
 
 ---
 
-## 1. The problem
+## 1. What changed in the simplification
 
-The analytics team runs a daily standup where the manager reviews work, resolves blockers, sets priorities and records follow-ups. That information usually lives in conversation or a separate notes tool and has to be copied into a tracker afterwards. The result is duplicated effort, stale task records and commitments that disappear when the meeting ends.
+The previous iteration exposed seven equally prominent destinations and a permanent three-panel meeting screen. The product review and implementation addressed that directly:
 
-Standup inverts the usual priority: instead of bolting a meeting view onto a generic task tracker, the meeting workspace is the product and the task foundation exists to support it.
-
-### Product principles implemented
-
-| Principle | Implementation |
+| Before | Now |
 |---|---|
-| Standup-first | Three-panel live workspace is the primary route and the manager's default action |
-| Minimal admin effort | Employees submit optional pre-meeting notes; existing task state and history are already visible |
-| Exception-first | Tasks are grouped into Needs attention → Active → Other (collapsed) |
-| Progressive disclosure | Task cards expand to blockers, follow-ups, previous updates and decisions |
-| Structured accountability | Decisions, blockers and action items are first-class rows with owners |
-| Carry-forward continuity | Open blockers and follow-ups remain queryable across every later session |
-| Auditability | Append-only audit events written in the same transaction as each mutation |
-| Human-controlled AI | Proposals are explicit operations; approve/edit/reject/apply is required |
-| Reuse infrastructure | FastAPI + PostgreSQL + S3 + Bedrock, deployable on the existing AWS/nex stack |
-| Validate before expanding | Scope is deliberately small; no Kubernetes, microservices or search cluster |
+| Seven manager destinations | **Today** and **Work**, plus a collapsed Pilot tools section |
+| Overview-style Today with pulse tiles, history, carry-forward, and a duplicate task list | One attention queue, a short current-work preview, and one optional update composer |
+| Employee questionnaire (progress + next steps + blockers + per-task updates) | One optional “Anything changed?” update, or a task-specific update, plus a distinct “Needs help” action |
+| Three permanent meeting panels | One main workspace with a compact person selector, on-demand roster, and a contextual capture drawer |
+| Five capture tabs and JSON-like records | Update / Needs help / Add follow-up, with Decision and General note under More |
+| Duplicate Complete buttons, review bars and status badges | One Finish, one review count, one status or leading reason per row |
+| Count-based, bookkeeping-heavy summary | Next actions, unresolved help, and decisions first; bookkeeping collapsed |
+| Separate Projects, Board, Intake, AI destinations | Work list; project settings contextual to Work; intake/transcripts/legacy board under Pilot tools |
+
+Old URLs are preserved through redirects: `/board` → `/work`, `/standup/today` → `/`, `/projects` → `/settings/projects`.
+
+The plan itself is in [docs/simplification-plan.md](docs/simplification-plan.md). The architectural decision is recorded in [ADR-015](docs/decisions.md).
 
 ---
 
-## 2. What is implemented
+## 2. The daily product
 
-### 2.1 Daily Standup Workspace
+### Today
 
-- **Pre-meeting updates** — employees submit progress, next steps and blockers, optionally linked to their tasks. Submissions stay open during the live meeting until the manager marks that person reviewed.
-- **Left panel: employee navigation** — pre-meeting indicator, review state, open blocker count and follow-up flag per participant; filters for all/pending.
-- **Center panel: exception-first task view** — blocked, overdue, at-risk and follow-up work first; then active work; planned/backlog/closed work collapsed by default. Cards show title, project, status, priority, due date, latest update and expand into blockers, action items, prior updates and decisions. Status changes and blocker resolution happen inline.
-- **Right panel: meeting capture** — Progress, Action item, Decision, Blocker and general Note forms. Records inherit the selected employee and task context. A live list shows everything captured in the session.
-- **Session lifecycle** — create for a date, start, review participants, mark follow-up, complete with a generated structured summary. Sessions are historical records.
-- **Carry-forward** — unresolved blockers and open action items remain attached to their origin session and appear in every later standup until resolved/completed.
+**Managers** see one state-aware action (Start / Resume / View outcomes), a single deduplicated team attention queue, and a Past standups link. There is no manager “My work”, no pulse tiles and no recent-history panel.
 
-### 2.2 Task foundation
+**Employees** see their attention queue, a short current-work preview, and one optional composer:
 
-- Users, roles, projects, project membership and ownership.
-- Tasks with assignee, priority, workflow status (`backlog`, `todo`, `in_progress`, `done`, `canceled`), due date, at-risk flag and reason.
-- Blockers are **separate** from workflow status: a task can stay `in_progress` while blocked.
-- Append-only progress updates, comments-as-updates, decisions and action items.
-- Optimistic concurrency via `Task.version` (stale edits return `409` with the current version).
-- Audit trail with actor, source, timestamp, previous/new values, related session and entity.
-- Kanban board with drag-and-drop (plus a status select for touch/keyboard), filters and a task editor.
-- Lightweight work intake: submit → review → accept/reject → convert to task or project.
-- Project overview with ownership, members and per-status task counts.
+- “Anything changed?” is one text field; a task link and next steps are optional.
+- Updating a task from its row records one update and an optional status change in place.
+- “Needs help” creates a durable blocker with an optional owner — not just a note for the meeting.
+- “Done” completes an owned follow-up in place.
+- Submitting collapses to a short saved receipt, not a permanent form.
 
-### 2.3 AI transcript reconciliation (Phase 4)
+Attention ordering is computed by the server and shared with the meeting workspace: blockers, overdue commitments, explicit risks, then follow-ups. A task with several exceptions appears once with additional reasons disclosed.
 
-- Manual transcript upload (`.txt`, `.vtt`, `.md`) to S3 in deployed environments, local filesystem in dev.
-- `mock` extractor for deterministic tests/demos and a Bedrock Converse adapter (`AI_PROVIDER=bedrock`).
-- Existing-task matching and ambiguity flags; duplicate detection against records already captured in the session.
-- Explicit proposals (`update_task_status`, `assign_task`, `add_progress_update`, `create_blocker`, `resolve_blocker`, `create_action_item`, `record_decision`) with evidence, speaker, timestamp and confidence.
-- Manager review: edit payload, approve, reject, apply. **Nothing is auto-applied.**
-- Conflict protection: applying re-checks the task version captured when the proposal was generated; stale proposals fail without overwriting newer data.
-- Asynchronous processing path: upload enqueues to SQS, a worker Lambda performs extraction. Inline processing is available for local demo/tests.
-- All proposals and applications produce audit events, including failure reasons.
+![Today for employees](docs/screenshots/today-employee.png)
 
-### 2.4 Product screens
+### Work
 
-| Screen | Purpose |
-|---|---|
-| Today | Manager: session launch, team pulse, open blockers/follow-ups. Employee: pre-meeting form, my work, carry-forward, history |
-| Live standup | Three-panel meeting workspace |
-| Standup history / session detail | Historical review of reports, decisions, blockers, follow-ups and audit trail |
-| Task board | Secondary Kanban view with drag/drop and filters |
-| Projects | Ownership, members, status and task distribution |
-| Work intake | Request submission, review and conversion |
-| Transcript review | Upload, evidence-backed proposals, approval workflow |
+A searchable task list instead of a Kanban default:
 
-More screenshots: [session summary](docs/screenshots/session-summary.png), [employee pre-meeting](docs/screenshots/pre-meeting-employee.png), [AI proposal review](docs/screenshots/ai-proposal-review.png), [board](docs/screenshots/board.png), [projects](docs/screenshots/projects.png).
+- Task title, owner where useful, status, and relevant due/attention text.
+- One search box and one Filters control.
+- Common statuses through the filter; backlog/canceled remain stored and accessible.
+- Inline status change and a shared task detail dialog for updates, blockers, follow-ups and history.
+- Task creation requires an explicit project selection when more than one project exists.
+- Project settings are reachable contextually from the filter panel by managers/project owners.
+- Pagination covers the full result set.
+
+![Work list](docs/screenshots/work-list.png)
+
+### Focused standup
+
+![Focused standup](docs/screenshots/live-meeting.png)
+
+- The global navigation is removed in meeting mode.
+- A compact person selector (previous/next, roster on demand) replaces the permanent participant column.
+- The permanent capture column is gone; Update, Needs help and Add follow-up open a contextual drawer, with Decision and General note under More.
+- One text field initially; owner/due date appear for follow-ups, and task context is shown and editable.
+- “Reviewed & next” is the main navigation action; viewing someone never marks them reviewed.
+- Finishing with unreviewed people requires an explicit override.
+- Only one review count and one Finish action exist.
+- The last saved capture is shown briefly in the header.
+- Switching people with an unsaved draft prompts before discarding it.
+
+### Outcomes, not statistics
+
+![Session outcomes](docs/screenshots/session-outcomes.png)
+
+The default summary shows:
+
+1. **Next actions** — description, owner, due date, completion.
+2. **Unresolved help needed** — blocker, owner, linked task, age and origin.
+3. **Decisions** — what was agreed and why.
+
+Progress records, participant reporting, session facts/notes and the audit trail are collapsed behind named details. Empty sections are hidden. The page clearly distinguishes what was recorded in the meeting from what is still open now.
+
+Carry-forward is unchanged underneath: open blockers and action items survive session completion and appear in later meetings until resolved.
 
 ---
 
-## 3. Quick start
+## 3. What is implemented
 
-### Prerequisites
+### Today / daily updates
 
-- Python 3.10+ and [uv](https://github.com/astral-sh/uv)
-- Node.js 20+ and npm
-- PostgreSQL only if you want to run against Postgres locally (SQLite is the default)
+- `GET /api/v1/today` returns the today session state, the server-ordered attention page, a current-work preview, and the current user’s daily update.
+- `PUT /api/v1/daily-updates/today` is a one-row-per-user-per-day upsert; retries update the same record rather than duplicating it.
+- Daily updates are visible in the meeting workspace even when no standup session existed when the employee wrote them.
+- Durable help requests can be task-linked or team-wide. Employees may report either.
+- Task updates, status changes and follow-up completion work from Today within existing permissions.
 
-### One command (SQLite, no Postgres needed)
+### Task foundation (preserved)
+
+- Users and roles; projects, ownership and membership.
+- Tasks with assignee, priority, workflow status, due date, at-risk flag/reason.
+- Blockers are separate from workflow status and retain owner, resolution and carry-forward.
+- Append-only progress updates, decisions and action items.
+- Optimistic concurrency (`Task.version` → `409` with current version).
+- Append-only audit events with actor, source, previous/new values and session linkage.
+- The full task APIs and project permissions are unchanged; hiding controls in the simplified UI does not change authorization.
+
+### Standup lifecycle (preserved)
+
+- One session per date; draft → in-progress → completed.
+- Participant review tracking, facilitator, timestamps, notes and deterministic summary.
+- Pre-meeting submission endpoints remain for compatibility, but the UI now uses daily updates and durable help requests.
+- Historical sessions, participant reporting and audit remain available.
+
+### Pilot tools
+
+- **Work intake** — retained behind Pilot tools; review/convert flow and permissions unchanged.
+- **Transcript review** — retained for managers behind Pilot tools and from a session’s “Import transcript” action. Proposals now show readable before/after text instead of JSON, and keep evidence, confidence, duplicate/ambiguity warnings, approval and stale-version protection.
+- **Legacy board** — available at `/legacy/board` during the pilot; `/board` redirects to Work.
+- **Project settings** — moved to `/settings/projects`, linked contextually from Work.
+
+### Not removed
+
+Data, APIs and audit for intake, transcripts, proposals, participant flags and the board are preserved. Nothing was deleted from the database. Participant follow-up flags are retired from new UI use but remain in history. Backlog and canceled statuses remain in the database and are accessible through Work filters.
+
+---
+
+## 4. Quick start
+
+### One command
 
 ```bash
 ./start.sh        # or: make start   (macOS, Linux, WSL or Git Bash)
 ```
 
-That single command checks Python/Node, creates the virtualenv and installs
-missing dependencies, seeds the demo data if the database is empty, starts the
-API and Vite, waits for both to be healthy, and opens <http://localhost:5173>.
-Ctrl+C stops both processes. Run it again any time — dependencies and data are
-reused.
+It checks Python/Node, installs missing dependencies, seeds demo data if the database is empty, starts FastAPI and Vite, waits for health, and opens <http://localhost:5173>. Ctrl+C stops both processes.
 
-Optional knobs:
+Options:
 
 ```bash
-NO_OPEN=1 ./start.sh                    # don't open a browser
-RESET=1 ./start.sh                      # rebuild the demo data (destructive)
-API_PORT=8001 WEB_PORT=5174 ./start.sh  # avoid port clashes
+NO_OPEN=1 ./start.sh
+RESET=1 ./start.sh                      # rebuild demo data (destructive)
+API_PORT=8001 WEB_PORT=5174 ./start.sh
 ```
 
-Logs are written to `.dev/api.log` and `.dev/web.log`.
+Logs: `.dev/api.log`, `.dev/web.log`.
 
-### Manual development (if you prefer two terminals)
+### Manual
 
 ```bash
-make setup        # backend venv + frontend node_modules
-make seed         # creates the demo analytics team, projects, tasks and 3 historical standups
-make api          # terminal 1 → http://localhost:8000 (Swagger at /api/docs)
-make web          # terminal 2 → http://localhost:5173
+make setup
+make seed
+make api      # terminal 1 → http://localhost:8000/api/docs
+make web      # terminal 2 → http://localhost:5173
 ```
 
-Open <http://localhost:5173>. The app starts as **Maya Chen (manager)**. Use the identity switcher at the bottom of the sidebar to experience the employee flow.
+### Demo identities
 
 | Identity | Role | Use |
 |---|---|---|
-| `manager@nex.local` | Manager | Facilitate standups, review, capture decisions |
-| `priya@nex.local` | Employee | Pre-meeting updates, own work |
+| `manager@nex.local` | Manager | Start/resume a standup, triage team attention, finish outcomes |
+| `priya@nex.local` | Employee | Daily update, task update, needs help |
 | `jordan@nex.local` | Employee | Blocked engineering work |
 | `sam@nex.local` | Employee | At-risk modelling work |
-| `dana@nex.local` | Employee | Marketing attribution, taxonomy blocker |
-| `admin@nex.local` | Admin | Administration |
+| `dana@nex.local` | Employee | Taxonomy blocker |
+| `admin@nex.local` | Admin | User/role administration |
 
-### Docker (PostgreSQL)
+Switch identities from the bottom of the compact sidebar.
 
-```bash
-make docker-up    # http://localhost:8080
-make docker-down
-```
+### Five-minute demo
 
-The compose stack runs Postgres 16, applies Alembic migrations, seeds the demo workspace idempotently and serves the built SPA through nginx with `/api` proxied to FastAPI.
-
-### Five-minute demo script
-
-1. As **Maya**, click **Start standup** on Today.
-2. Select **Priya Patel** in the left panel. The center shows `Attribution model v2` (blocked, at risk, open follow-up) and `Q4 revenue reconciliation` (overdue) before ordinary work.
-3. Expand a task, change its status or resolve a blocker inline.
-4. From a task card click **Log update**, **Report blocker**, **Follow-up** or **Decision**. The right panel preserves the selected task; captured records appear immediately.
-5. Switch to **Priya** and submit a pre-meeting update from Today (allowed until she is reviewed).
-6. Switch back to Maya, reopen the live session, confirm Priya's update appears in the workspace, then mark her reviewed.
-7. Complete the standup. The summary is generated from structured records. Open **Standup history** to review it.
-8. Open **Transcript review**, upload a transcript, and approve/apply a proposal. Note that the task does not change until approval, and that applying a stale proposal returns a conflict.
+1. As **Maya**, open Today. The team attention queue is the only work list; click **Start standup**.
+2. In the focused meeting, use the person selector to choose **Priya**.
+3. Click **Update** on a row. One field, one task context; save. The header briefly confirms the saved capture.
+4. Click **Needs help**, describe the issue, optionally choose who can help, save.
+5. Click **Add follow-up**; set an owner and optional due date.
+6. Use **More → Decision** for an agreed outcome.
+7. Click **Reviewed & next**; the review count advances and the next unreviewed person is selected.
+8. Click **Finish**. If people are unreviewed, confirm the override. The outcome page shows Next actions, Unresolved help needed and Decisions.
+9. Switch to **Priya**, open Today, write one “Anything changed?” update. No multi-question form; no duplicate task report.
+10. Open **Work**: search, filter, change status, or open the shared task detail. No board columns in the default experience.
 
 ---
 
-## 4. Architecture
+## 5. Architecture
 
 ```mermaid
 flowchart LR
@@ -173,29 +206,14 @@ flowchart LR
   Worker --> CW
 ```
 
-- **Backend:** Python / FastAPI, modular monolith. Routers → services → SQLAlchemy models. One transaction per request; audit rows share the mutation's transaction.
-- **Database:** PostgreSQL in deployed environments; SQLite for local tests/dev. Alembic owns the schema. All timestamps are naive UTC.
-- **Auth:** the nex portal injects SSO headers (`X-Nex-User-Id`, `X-Nex-Email`, `X-Nex-Roles`, …). The API trusts them only in `AUTH_MODE=nex`; the gateway must strip client-supplied copies. Local `AUTH_MODE=dev` uses `X-Dev-User` and refuses to start outside local/dev/test.
-- **Authorization:** application-level RBAC (employee/manager/admin) plus project ownership/membership checks.
-- **AI:** upload → S3 → SQS → worker Lambda → Bedrock → PostgreSQL proposals → manager review → apply with version check → audit.
-- **Infrastructure:** Terraform (VPC reuse, RDS, S3, ECR, two Lambdas, SQS + DLQ, API Gateway, CloudWatch alarms), GitHub Actions CI.
+- **Frontend:** React + Tailwind. Routes: `/` (Today), `/work`, `/standups`, `/standups/:id`, focused `/standups/:id/live` outside the global layout, `/settings/projects`, plus pilot routes and legacy redirects.
+- **Backend:** FastAPI modular monolith. Routers → services → SQLAlchemy models. One transaction per request; audit rows commit with the mutation.
+- **Database:** PostgreSQL in deployment, SQLite locally/tests; Alembic owns the schema (including `daily_updates`).
+- **Auth:** nex SSO headers in `AUTH_MODE=nex`; `X-Dev-User` in local dev. RBAC remains in the application.
+- **Attention ordering:** one service (`app/services/attention.py`) feeds Today and the meeting workspace. Both use the same exception definitions and severity order.
+- **AI:** upload → S3 → SQS → worker Lambda → Bedrock → proposals → human review → apply with version check → audit. Mock extractor for tests/demos.
 
 Detailed notes: [architecture](docs/architecture.md) · [data model](docs/data-model.md) · [API](docs/api.md) · [operations](docs/operations.md) · [decisions](docs/decisions.md).
-
----
-
-## 5. Data model and audit in one minute
-
-Core tables: `users`, `projects`, `project_members`, `tasks`, `task_updates`, `blockers`, `decisions`, `action_items`, `standup_sessions`, `standup_participants`, `session_notes`, `audit_events`, plus Phase 4's `transcripts` and `ai_proposals`.
-
-- `tasks.status` is the current workflow state.
-- `blockers` carry their own `open/resolved` state, owner, reporter, origin session and resolution details.
-- `task_updates` are append-only.
-- Carry-forward is computed live: open blockers and open action items are never copied or closed by ending a meeting.
-- `audit_events` are append-only and include `source` (`employee_update`, `manager_action`, `task_interface`, `ai_approved`, `system`) and an optional `session_id`.
-- `tasks.version` increments on every accepted edit and is used for both human optimistic concurrency and AI apply conflict detection.
-
-See [docs/data-model.md](docs/data-model.md).
 
 ---
 
@@ -203,41 +221,44 @@ See [docs/data-model.md](docs/data-model.md).
 
 | Capability | Employee | Manager | Admin |
 |---|---|---|---|
-| View own tasks / projects they belong to | ✅ | ✅ | ✅ |
-| Update own task status, add own updates | ✅ | ✅ | ✅ |
+| View own work / projects they belong to | ✅ | ✅ | ✅ |
+| Update own task, add own progress, change own status | ✅ | ✅ | ✅ |
+| Report a task-linked or team-wide help request | ✅ | ✅ | ✅ |
 | Reassign tasks / edit any task | — | ✅ | ✅ |
-| Create/edit projects, manage membership | owner only | ✅ | ✅ |
-| Create/start/complete standups, review people | — | ✅ | ✅ |
-| Capture progress/actions/decisions/blockers in a session | — | ✅ | ✅ |
-| Submit own pre-meeting update | ✅ (until reviewed) | ✅ | ✅ |
-| View team-wide audit / approve AI proposals | own scope | ✅ | ✅ |
+| Create/edit projects, manage membership | owner | ✅ | ✅ |
+| Start/finish standups, review participants | — | ✅ | ✅ |
+| Capture meeting updates/follow-ups/decisions/blockers | — | ✅ | ✅ |
+| Write own daily update | ✅ | ✅ | ✅ |
+| View team attention / full audit / approve AI proposals | own scope | ✅ | ✅ |
 | Manage users and roles | — | — | ✅ |
+
+Hiding a control is never used as authorization; the service layer enforces these rules.
 
 ---
 
 ## 7. Testing
 
 ```bash
-make backend-test    # 42 pytest tests
+make backend-test    # 48 pytest tests
 make backend-lint    # ruff
 make frontend-check  # tsc + production build
 ```
 
-The backend suite covers:
+Backend coverage includes:
 
-- dev/nex authentication, role elevation and unknown identities;
-- task CRUD, optimistic concurrency, status transitions and RBAC;
-- blockers remaining separate from workflow status and preserving task state on resolution;
-- append-only updates, audit actor/source/session fields and employee audit scoping;
-- pre-meeting self-only submission and the live/late submission window;
-- exception-first workspace classification and done-task exclusion;
-- carry-forward across completed sessions and removal on resolution;
-- review requirements, forced completion, generated summaries and session captures;
-- historical employee reporting reconstruction;
-- intake review and conversion;
-- AI: no auto-mutation, approve/apply, editing, rejection, duplicate detection, ambiguous matches, stale-version conflicts and audit source.
+- auth modes, role elevation, RBAC and employee self-scope;
+- task CRUD, optimistic concurrency and status transitions;
+- blockers independent of workflow status; taskless/team-wide employee help requests;
+- append-only updates, audit actor/source/session and audit scoping;
+- daily update upsert and visibility in the meeting workspace;
+- server attention ordering, deduplication, full-set pagination and empty/manager/employee scopes;
+- session lifecycle, review/force-finish, captures, outcomes and historical review;
+- intake review/conversion;
+- AI no-auto-mutation, approve/apply/edit/reject, duplicates, ambiguous matches, stale-version conflicts and the SQS worker path.
 
-The flows in the screenshots were exercised end-to-end in a real Chromium session (manager and employee identities, capture, pre-meeting, completion, board, intake, AI upload/approval) with no console errors.
+The new flows were also exercised end-to-end in Chromium (manager Today → focused meeting → capture drawer → reviewed & next → outcomes → employee Today → Work → redirects → readable AI review) with zero console/page errors.
+
+Pilot validation: [docs/pilot-checklist.md](docs/pilot-checklist.md).
 
 ---
 
@@ -246,47 +267,38 @@ The flows in the screenshots were exercised end-to-end in a real Chromium sessio
 ```text
 backend/
   app/
-    api/          FastAPI routers (users, projects, tasks, standups, intake, audit, ai)
-    ai/           extractor interface + mock + Bedrock adapter
-    core/         auth, RBAC, errors, serializers
-    models/       SQLAlchemy entities
-    schemas/      Pydantic requests/responses
-    services/     domain logic; transactions + audit
-    main.py       app factory, error handlers, health
-    seed.py       realistic demo dataset
+    api/          routers (today, daily updates, tasks, standups, intake, audit, ai)
+    services/     attention ordering, today, standups, tasks, daily updates, AI
+    models/       SQLAlchemy entities (including daily_updates)
+    schemas/      Pydantic contracts
+    ai/           mock + Bedrock extractors
+    seed.py       demo analytics team and historical standups
     worker.py     SQS transcript worker
-  migrations/     Alembic environment + initial schema
-  tests/          pytest suite
+  migrations/     Alembic, initial schema + daily updates
+  tests/          48 pytest tests
 frontend/
   src/
-    components/   layout, UI primitives, standup workspace panels
-    pages/        Today, Workspace, Session, Standups, Board, Projects, Intake, AI
-    lib/          typed API client, auth context, hooks, formatting
-  Dockerfile, nginx.conf
-infra/terraform/  AWS reference stack (validated with terraform validate)
-docs/             architecture, data model, API, operations, decisions, screenshots
-.github/workflows/ci.yml
-docker-compose.yml
-Makefile
+    pages/        Today, Work, Session, Standups, Projects, Intake, AI, legacy Board
+    components/   Layout, TaskDialog, TaskCreateDialog, TodayActions,
+                  workspace/CaptureDrawer
+    lib/          typed API client, auth, hooks
+infra/terraform/  AWS reference stack
+docs/             architecture, data model, API, operations, decisions, pilot, screenshots
 ```
 
 ---
 
 ## 9. Deployment (reference)
 
-1. `cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars` and fill in the existing VPC/private subnets, DB password and nex origin.
+1. `cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars` and fill the existing VPC/subnets, DB password and nex origin.
 2. `terraform -chdir=infra/terraform init && terraform apply`.
-3. Build and push the backend image to the ECR repository output (`linux/amd64`):
-   ```bash
-   docker build --platform linux/amd64 -t "$API_IMAGE" backend
-   docker push "$API_IMAGE"
-   ```
-4. Update `api_image_uri`, apply Terraform again. Both the API and worker Lambdas use the same immutable image.
-5. Run `alembic upgrade head` once against the RDS instance from a network-connected CI runner or bastion.
-6. Build the frontend (`npm run build`) and host `dist/` inside the nex portal; point `VITE_API_BASE` at the API Gateway URL if it is not same-origin.
-7. Set `AI_PROVIDER=bedrock` when transcript extraction is approved; keep `AI_PROCESSING_INLINE=false` so the SQS worker handles it.
+3. Build/push the backend image to ECR (`linux/amd64`).
+4. Set `api_image_uri` and apply again; both API and worker use the same image.
+5. Run `alembic upgrade head` against RDS from a network-connected runner/bastion.
+6. Build the frontend and host `dist/` in nex; point `VITE_API_BASE` at API Gateway if not same-origin.
+7. Keep `AI_PROCESSING_INLINE=false` in deployment; the SQS worker handles transcripts.
 
-The reference Terraform is intentionally minimal. It assumes the existing nex VPC has NAT or VPC endpoints for S3, SQS and Bedrock. See [operations](docs/operations.md) for security and connection-management notes.
+VPC networking must provide egress or endpoints for S3, SQS and Bedrock. See [operations](docs/operations.md).
 
 ---
 
@@ -294,32 +306,32 @@ The reference Terraform is intentionally minimal. It assumes the existing nex VP
 
 | Phase | Scope | Status |
 |---|---|---|
-| 1 — Minimal task foundation | users, projects, tasks, assignments, statuses, priorities, audit, auth | ✅ |
-| 2 — Daily Standup Workspace | sessions, pre-meeting, exception-first workspace, capture, carry-forward, history | ✅ |
-| 3 — Task management enhancements | Kanban, intake, filtering, project overview | ✅ lightweight |
-| 4 — AI transcript reconciliation | upload, extraction, matching, duplicates, proposals, approval, conflicts, audit | ✅ with mock + Bedrock adapter |
-| 5 — Microsoft Teams integration | Graph transcript retrieval, automated processing, notifications | ⏳ not started |
+| 1 — Task foundation | users, projects, tasks, assignments, audit, auth | ✅ |
+| 2 — Standup workspace | sessions, review, capture, carry-forward, history | ✅ (refocused meeting) |
+| 3 — Task management / simplification | Today + Work, healthy meeting flow, outcomes summary, pilot gating | ✅ |
+| 4 — AI transcript reconciliation | upload, extraction, proposals, human approval, conflicts, audit | ✅ pilot |
+| 5 — Microsoft Teams integration | Graph transcript retrieval, automated processing | ⏳ not started |
 
-### Known limitations / deliberate deferrals
+### Deliberate deferrals
 
-- **Single team workspace.** There is no multi-team/organisation scoping yet; deployment is per team.
-- **No real-time updates.** Two managers opening the same session do not live-sync; refresh is manual. Version checks prevent silent overwrites.
-- **RDS connections.** Lambda concurrency is unbounded by default in Terraform for the API; add reserved concurrency or RDS Proxy before scaling past a small team.
-- **Transcript extraction quality.** The mock extractor is heuristic and the Bedrock prompt is a starting point, not a tuned production model. Human review is mandatory and is the safety mechanism.
-- **AI evidence retention.** Transcript retention is configurable in S3, but organisation-specific access control/retention policy still needs review before production use.
-- **No separate comment thread.** Free-text task comments are represented by progress updates and session notes; a distinct comment stream is deferred.
-- **No attachments on tasks.** Transcript files are the only binary upload in the MVP.
-- **No notifications/email.** Follow-ups are visible in-app only.
-- **Session creation is manual.** A manager creates today's session; there is no scheduled daily session generator yet.
-- **Secrets.** The Terraform example passes the DB password through a variable for clarity; production should use Secrets Manager and an RDS Proxy.
-- **Frontend deployment.** The SPA is built and hosted by nex; this repo does not assume S3/CloudFront frontend infrastructure.
+- **Single team workspace.** No multi-team tenancy yet.
+- **No real-time collaboration.** Two managers do not live-sync; versions prevent silent overwrites.
+- **No automatic session creation.** A manager starts today’s session from Today.
+- **No notifications/email.**
+- **No separate comment thread or attachments.** Task updates and session notes cover free text; transcripts are the only binary upload.
+- **Capture retries.** Daily updates are idempotent upserts; append-only capture actions rely on UI submit guards. Full idempotency keys for every capture are a follow-up.
+- **Legacy/pilot surface.** Board, intake, transcript review and project settings remain available during the pilot; they are not part of the default navigation.
+- **Secrets.** The Terraform example passes the DB password as a variable for clarity; production should use Secrets Manager and consider RDS Proxy.
+- **AI quality.** The mock extractor is deterministic; the Bedrock prompt needs validation against authorized real transcripts. Human approval is mandatory.
 
 ---
 
 ## 11. Documentation
 
-- [docs/architecture.md](docs/architecture.md) — request lifecycle, auth boundary, carry-forward, AI pipeline, concurrency.
-- [docs/data-model.md](docs/data-model.md) — entities, relationships, invariants, indexes, audit.
-- [docs/api.md](docs/api.md) — endpoint reference with roles and key errors.
-- [docs/operations.md](docs/operations.md) — env vars, migrations, deployment, monitoring, security.
-- [docs/decisions.md](docs/decisions.md) — ADR-style decisions and trade-offs.
+- [docs/simplification-plan.md](docs/simplification-plan.md) — the product review and phased delivery plan.
+- [docs/architecture.md](docs/architecture.md) — request lifecycle, attention ordering, meeting flow, AI pipeline.
+- [docs/data-model.md](docs/data-model.md) — entities, relationships, invariants, audit.
+- [docs/api.md](docs/api.md) — endpoint reference, including Today, daily updates, blockers and outcomes.
+- [docs/operations.md](docs/operations.md) — environment, migrations, deployment, monitoring, security.
+- [docs/decisions.md](docs/decisions.md) — ADRs, including ADR-015 (simplification).
+- [docs/pilot-checklist.md](docs/pilot-checklist.md) — validation scenarios, targets and exit criteria.

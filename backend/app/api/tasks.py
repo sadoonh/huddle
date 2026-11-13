@@ -215,6 +215,12 @@ def list_blockers(
     )
 
 
+@router.post("/blockers", response_model=BlockerOut, status_code=201)
+def create_blocker(db: DB, user: CurrentUser, payload: BlockerCreate):
+    """Report a blocker, optionally task-linked. Employees may report team-wide help needs."""
+    return blocker_out(task_service.create_blocker(db, user, payload))
+
+
 @router.patch("/blockers/{blocker_id}/resolve", response_model=BlockerOut)
 def resolve_blocker(db: DB, user: CurrentUser, blocker_id: str, payload: BlockerResolve):
     return blocker_out(

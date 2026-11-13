@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { Icon, type IconName } from './icons'
 import { formatDate, humanize, initials, relativeDay } from '../lib/format'
 import type { Priority, SessionStatus, TaskStatus } from '../lib/types'
@@ -142,6 +142,15 @@ export function Modal({
   footer?: ReactNode
   wide?: boolean
 }): ReactNode {
+  useEffect(() => {
+    if (!open) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
   if (!open) return null
   return (
     <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-slate-950/40 p-4 backdrop-blur-sm sm:items-center">
@@ -228,5 +237,61 @@ export function Toggle({
       </button>
       {label}
     </label>
+  )
+}
+
+
+export function Drawer({
+  open,
+  onClose,
+  title,
+  description,
+  children,
+  footer,
+}: {
+  open: boolean
+  onClose: () => void
+  title: string
+  description?: string
+  children: ReactNode
+  footer?: ReactNode
+}): ReactNode {
+  useEffect(() => {
+    if (!open) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
+  if (!open) return null
+  return (
+    <div className="fixed inset-0 z-40 flex justify-end bg-slate-950/30 backdrop-blur-[1px]">
+      <button
+        type="button"
+        className="absolute inset-0 h-full w-full cursor-default"
+        aria-label="Close panel"
+        onClick={onClose}
+      />
+      <aside
+        className="animate-fade-in relative flex h-full w-full max-w-md flex-col border-l border-slate-200 bg-white shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">{title}</h2>
+            {description && <p className="mt-0.5 text-xs text-slate-500">{description}</p>}
+          </div>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} aria-label="Close">
+            <Icon name="x" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
+        {footer && <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-3">{footer}</div>}
+      </aside>
+    </div>
   )
 }

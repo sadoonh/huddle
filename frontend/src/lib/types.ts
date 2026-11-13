@@ -140,6 +140,60 @@ export interface WorkspaceTask extends Task {
   reasons: string[]
 }
 
+export interface DailyUpdate {
+  id: string
+  user_id: string
+  update_date: string
+  progress: string
+  next_steps: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface TodaySession {
+  id: string
+  session_date: string
+  status: SessionStatus
+  facilitator: UserBrief | null
+  reviewed_count: number
+  participant_count: number
+}
+
+export type AttentionReason = 'blocker' | 'overdue' | 'at_risk' | 'follow_up'
+
+export interface AttentionItem {
+  kind: 'task' | 'blocker' | 'action_item'
+  id: string
+  task_id: string | null
+  title: string
+  detail: string | null
+  owner: UserBrief | null
+  reason: string
+  reasons: string[]
+  due_date: string | null
+  age_days: number
+  task_status: TaskStatus | null
+  open_blocker_count: number
+  open_action_item_count: number
+  origin_session_date: string | null
+}
+
+export interface TodayData {
+  session: TodaySession | null
+  daily_update: DailyUpdate | null
+  attention: Page<AttentionItem>
+  current_work: Page<Task>
+}
+
+export interface SessionOutcomes {
+  action_items: ActionItem[]
+  unresolved_blockers: CarriedItem[]
+  decisions: Decision[]
+  updates_count: number
+  participant_count: number
+  reviewed_count: number
+}
+
 export interface Participant {
   id: string
   user: UserBrief
@@ -153,6 +207,7 @@ export interface Participant {
   follow_up_note: string | null
   open_blocker_count: number
   open_action_item_count: number
+  has_daily_update: boolean
 }
 
 export interface Session {
@@ -192,6 +247,7 @@ export interface CarriedItem {
 export interface Workspace {
   session_id: string
   participant: Participant
+  daily_update: DailyUpdate | null
   needs_attention: WorkspaceTask[]
   active: WorkspaceTask[]
   other: WorkspaceTask[]

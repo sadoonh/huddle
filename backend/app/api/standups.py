@@ -24,6 +24,7 @@ from app.schemas.standups import (
     SessionNoteCreate,
     SessionNoteOut,
     SessionOut,
+    SessionOutcomes,
     SessionSummaryOut,
     UserStandupHistory,
 )
@@ -210,6 +211,11 @@ def capture_task_status(
 # ---------------------------------------------------------------------------
 # History / carry-forward
 # ---------------------------------------------------------------------------
+@router.get("/sessions/{session_id}/outcomes", response_model=SessionOutcomes)
+def outcomes(db: DB, user: CurrentUser, session_id: str):
+    return standup_service.session_outcomes(db, user, session_id)
+
+
 @router.get("/sessions/{session_id}/timeline", response_model=list[AuditEventOut])
 def timeline(db: DB, user: CurrentUser, session_id: str):
     return standup_service.session_timeline(db, user, session_id)

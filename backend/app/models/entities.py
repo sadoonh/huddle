@@ -388,6 +388,29 @@ class ActionItem(UUIDMixin, TimestampMixin, Base):
     completed_by: Mapped[User | None] = relationship(foreign_keys=[completed_by_id])
 
 
+class DailyUpdate(UUIDMixin, TimestampMixin, Base):
+    """One optional short update per employee per day.
+
+    This is the simplified replacement for the multi-question pre-meeting form.
+    It exists independently of a standup session so employees can report a
+    change before the manager opens the meeting.
+    """
+
+    __tablename__ = "daily_updates"
+    __table_args__ = (
+        UniqueConstraint("user_id", "update_date", name="uq_daily_update_user_date"),
+    )
+
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    update_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    progress: Mapped[str] = mapped_column(Text, nullable=False)
+    next_steps: Mapped[str | None] = mapped_column(Text)
+
+    user: Mapped[User] = relationship()
+
+
 class SessionNote(UUIDMixin, Base):
     __tablename__ = "session_notes"
 

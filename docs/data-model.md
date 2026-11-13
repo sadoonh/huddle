@@ -22,6 +22,7 @@ erDiagram
   standup_sessions ||--o{ session_notes : has
   standup_sessions ||--o{ audit_events : relates
   users ||--o{ audit_events : acts
+  users ||--o{ daily_updates : writes
   transcripts ||--o{ ai_proposals : yields
   standup_sessions ||--o{ transcripts : links
   users ||--o{ intake_requests : requests
@@ -113,9 +114,24 @@ Unique `(session_id, user_id)`. Fields:
 
 - `pre_meeting_progress`, `pre_meeting_next_steps`, `pre_meeting_blockers`, `pre_meeting_submitted_at`
 - `reviewed_at`, `reviewed_by_id`
-- `follow_up_flagged`, `follow_up_note`
+- `follow_up_flagged`, `follow_up_note` — retired from new UI use; retained for historical display.
+- Pre-meeting fields — legacy contract retained for compatibility; the simplified UI writes daily updates and durable help requests instead.
 
-Pre-meeting submission stays open while the session is draft **or** in progress, until the participant is reviewed. This supports late arrivals without reopening a completed session.
+Pre-meeting submission (legacy API) stays open while the session is draft **or** in progress, until the participant is reviewed. New help requests are separate `blockers` rows so they carry forward independently.
+
+### daily_updates
+
+One optional short update per employee per day, available even before a standup session exists.
+
+| Column | Notes |
+|---|---|
+| `user_id` | employee |
+| `update_date` | date |
+| `progress` | short free text |
+| `next_steps` | optional |
+| `created_at`, `updated_at` | UTC |
+
+Unique `(user_id, update_date)`. `PUT /daily-updates/today` upserts; repeats update the same row and produce `daily_update.updated` audit rather than duplicate records. When a meeting session exists for that date, the workspace includes the participant's daily update.
 
 ### session_notes
 
@@ -167,31 +183,35 @@ No update/delete API exists for audit rows. Corrections are new events.
 ## 3. Invariants
 
 1. A task has exactly one current status; blockers never overwrite it.
-2. A session date is unique. A participant exists at most once per session.
-3. Completing a session does not change blocker/action-item state.
-4. `task_updates` and `audit_events` are append-only.
-5. A task edit and its audit event commit together.
-6. A task edit with a stale `expected_version` is rejected.
-7. An AI proposal can only be applied after approval, and only if `Task.version` still matches `base_task_version`.
-8. Action items/decisions/blockers keep the session they originated from even after later sessions.
-9. Task updates preserve `attributed_to_user_id` separately from the author, so manager-captured updates remain attributable to the employee.
-10. Users are never silently demoted by SSO headers.
+2. A user has at most one daily update per date; updates are upserts.
+3. A “Needs help” action creates a blocker row; it is never only participant text.
+4. A session date is unique. A participant exists at most once per session.
+5. Completing a session does not change blocker/action-item state.
+6. `task_updates` and `audit_events` are append-only.
+7. A task edit and its audit event commit together.
+8. A task edit with a stale `expected_version` is rejected.
+9. An AI proposal can only be applied after approval, and only if `Task.version` still matches `base_task_version`.
+10. Action items/decisions/blockers keep the session they originated from even after later sessions.
+11. Task updates preserve `attributed_to_user_id` separately from the author, so manager-captured updates remain attributable to the employee.
+12. Users are never silently demoted by SSO headers.
 
 ## 4. Common queries
 
 | Question | Query |
 |---|---|
-| Open blockers for a person | `blockers.status='open' AND (owner_id=? OR task.assignee_id=?)` |
+| Open blockers for a person | `blockers.status='open' AND (owner_id=? OR reported_by_id=? OR task.assignee_id=?)` |
 | Carry-forward action items | `action_items.status='open' AND (owner_id=? OR task.assignee_id=?)` |
 | Needs attention | task has open blocker OR `due_date < today` OR `is_at_risk` OR open action item |
 | Session review progress | `participants reviewed_at is not null / total` |
+| Today's short update | `daily_updates` where `user_id=?` and `update_date=today` |
+| Team attention queue | shared `exception_reasons` + severity order in `app/services/attention.py` |
 | What did Alice report last week? | `standup_participants` for Alice join sessions in range; updates where `session_id` and (`attributed_to` or `author` = Alice) |
 | How did a task progress? | `task_updates` for task ordered by `created_at`; audit events for status/assignment changes |
 | When was a blocker first raised? | `blockers.created_at`, `reported_session_id`, and the `blocker.created` audit event |
 
 ## 5. Migrations
 
-- Alembic is the schema authority. The initial migration (`migrations/versions/*_initial_schema.py`) creates all tables and indexes.
+- Alembic is the schema authority. The initial migration creates all tables and indexes; a follow-up migration adds `daily_updates`.
 - `alembic check` runs in CI against a fresh database to detect model/migration drift.
 - The API never calls `create_all` in production; `AUTO_INIT_DB` is false by default and SQLite auto-init is limited to local/test.
 - Timestamps are naive UTC, both in SQLite and PostgreSQL.

@@ -75,6 +75,68 @@ List endpoints that paginate return:
 
 ---
 
+## 2.5 Today and daily updates
+
+| Method | Path | Role | Notes |
+|---|---|---|---|
+| GET | `/today` | any authenticated | session state, server-ordered attention page, current-work preview, today's daily update |
+| GET | `/daily-updates/today` | any authenticated | current user's daily update or `null` |
+| PUT | `/daily-updates/today` | any authenticated | upsert one daily update per user per day |
+
+`GET /today` parameters:
+
+| Parameter | Default | Notes |
+|---|---|---|
+| `attention_limit` | 25 | 1–100 |
+| `attention_offset` | 0 | paginate the full attention set |
+| `work_limit` | 6 | employee current-work preview; ignored for managers |
+
+Attention items are deduplicated: a task with a blocker, overdue date, at-risk flag and open follow-up appears **once** with `reasons: ["blocker","overdue","at_risk","follow_up"]` and one `reason` leading. Taskless blockers/follow-ups and blockers on closed tasks get their own `kind: "blocker"` / `"action_item"` rows, so nothing is hidden.
+
+```json
+{
+  "session": {"id": "...", "status": "draft", "reviewed_count": 0, "participant_count": 4},
+  "daily_update": {"progress": "Dashboard validation is complete.", "next_steps": null},
+  "attention": {
+    "items": [
+      {
+        "kind": "task",
+        "id": "...",
+        "task_id": "...",
+        "title": "Attribution model v2",
+        "detail": "Warehouse access missing for the marketing schema.",
+        "owner": {"id": "...", "full_name": "Jordan Lee", "role": "employee"},
+        "reason": "blocker",
+        "reasons": ["blocker", "at_risk", "follow_up"],
+        "due_date": "2026-11-17",
+        "age_days": 3,
+        "task_status": "in_progress",
+        "open_blocker_count": 1,
+        "open_action_item_count": 1,
+        "origin_session_date": "2026-11-10"
+      }
+    ],
+    "total": 5,
+    "limit": 25,
+    "offset": 0
+  },
+  "current_work": {"items": [], "total": 0, "limit": 6, "offset": 0}
+}
+```
+
+Ordering is: blockers → overdue → at risk → follow-ups, with due date/age/title as tie-breakers. Managers see team attention and no personal current-work preview; employees see their own tasks plus help/follow-ups they own or reported.
+
+### Daily update
+
+```http
+PUT /api/v1/daily-updates/today
+{ "progress": "Dashboard validation is complete.", "next_steps": "Publish tomorrow." }
+```
+
+One row per user/date; repeating the call updates the same row and records `daily_update.updated` audit. The meeting workspace includes the participant's daily update even if no session existed when it was written.
+
+---
+
 ## 3. Projects
 
 | Method | Path | Role | Notes |
@@ -140,6 +202,7 @@ HTTP/1.1 409 Conflict
 | Method | Path | Role | Notes |
 |---|---|---|---|
 | GET | `/blockers` | any (scoped) | `task_id`, `owner_id`, `open_only=true` |
+| POST | `/blockers` | any authenticated | task-linked or team-wide help request; optional owner |
 | PATCH | `/blockers/{id}/resolve` | owner/reporter/manager | requires `resolution_details` |
 | GET | `/action-items` | any (scoped) | `session_id`, `owner_id`, `open_only` |
 | POST | `/action-items` | manager | general/outside-session follow-up |
@@ -162,7 +225,7 @@ Resolving a blocker preserves task status and records `resolved_at`, `resolved_b
 | POST | `/standups/sessions/{id}/start` | manager | idempotent if already in progress |
 | GET | `/standups/sessions/{id}/summary` | participant/manager | preview or completed summary |
 | POST | `/standups/sessions/{id}/complete` | manager | `{notes?, force?}` |
-| POST | `/standups/sessions/{id}/participants/{user_id}/pre-meeting` | self (until reviewed) | progress / next steps / blockers / task updates |
+| POST | `/standups/sessions/{id}/participants/{user_id}/pre-meeting` | self (until reviewed) | legacy pre-meeting contract; the UI uses daily updates and direct task updates |
 | GET | `/standups/sessions/{id}/participants/{user_id}/workspace` | participant/manager | exception-first workspace |
 | PATCH | `/standups/sessions/{id}/participants/{user_id}` | manager | `reviewed`, `follow_up_flagged`, `follow_up_note` |
 | POST | `/standups/sessions/{id}/updates` | manager | record progress in the meeting |
@@ -174,6 +237,7 @@ Resolving a blocker preserves task status and records `resolved_at`, `resolved_b
 | GET | `/standups/sessions/{id}/notes` | participant/manager | session notes |
 | PATCH | `/standups/sessions/{id}/tasks/{task_id}/status` | manager | status change attributed to the session |
 | GET | `/standups/sessions/{id}/captures` | participant/manager | all structured records captured in the session |
+| GET | `/standups/sessions/{id}/outcomes` | participant/manager | next actions, unresolved help still open now, decisions |
 | GET | `/standups/sessions/{id}/timeline` | participant/manager | audit events for the session |
 | GET | `/standups/users/{user_id}/history?start=&end=&limit=` | self/manager | historical reports, blockers, actions, decisions |
 | GET | `/standups/users/{user_id}/carry-forward` | self/manager | open blockers/action items, at-risk and overdue tasks |
@@ -238,6 +302,17 @@ POST /api/v1/standups/sessions/{session_id}/updates
 ```
 
 The record gets `source=standup`, `session_id`, author = current manager and an audit event with `source=manager_action`.
+
+### Outcomes
+
+`GET /api/v1/standups/sessions/{id}/outcomes` returns:
+
+- `action_items`: owned commitments recorded in the session (with completion status);
+- `unresolved_blockers`: open blockers for participants or reported in the session, including carry-forward origin/age;
+- `decisions`: decisions recorded in the session;
+- counts for updates, participants and reviews.
+
+This is the data behind the outcome-first history page.
 
 ### Complete
 
@@ -309,6 +384,10 @@ Managers see the full trail. Employees see events they acted on, events in sessi
   "base_task_version": 3
 }
 ```
+
+### UI review
+
+The frontend presents proposals as human-readable before/after changes (task, owner, status, description) rather than JSON. The API shape above is unchanged.
 
 ### Apply conflict
 

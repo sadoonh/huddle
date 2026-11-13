@@ -100,10 +100,12 @@ def participant_out(
     *,
     open_blocker_count: int = 0,
     open_action_item_count: int = 0,
+    has_daily_update: bool = False,
 ) -> ParticipantOut:
     out = ParticipantOut.model_validate(participant)
     out.open_blocker_count = open_blocker_count
     out.open_action_item_count = open_action_item_count
+    out.has_daily_update = has_daily_update
     return out
 
 

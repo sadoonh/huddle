@@ -12,6 +12,8 @@ Short ADR-style notes for the choices that shape the MVP. Each entry states cont
 
 **Consequences:** The task foundation stays deliberately small. Board/planning features are deferred until usage demonstrates a need. The UI invests in selection state, capture context and review progress rather than drag-and-drop polish.
 
+**Update (ADR-015):** The meeting is now a focused mode entered from Today, not a persistent three-panel destination. The Kanban board is legacy/pilot only.
+
 ---
 
 ## ADR-002 — Exceptions first, routine work collapsed
@@ -132,6 +134,8 @@ Short ADR-style notes for the choices that shape the MVP. Each entry states cont
 
 **Consequences:** Late arrivals can still contribute, and managers can start on time. The data is still labelled as pre-meeting input and is attributed to the employee. The trade-off is that a submission can arrive after the meeting has started; the workspace refreshes on demand.
 
+**Update (ADR-015):** The daily UI no longer uses the multi-question pre-meeting form. It writes one optional date-scoped daily update, or a task update. The pre-meeting endpoints remain for compatibility and history.
+
 ---
 
 ## ADR-014 — Deterministic session summary, not an LLM summary
@@ -151,3 +155,33 @@ Short ADR-style notes for the choices that shape the MVP. Each entry states cont
 - **Real-time collaboration** — polling/refresh is sufficient for one facilitator; version checks prevent silent overwrites.
 - **Multi-team tenancy** — the MVP is per-team; adding `team_id` to projects/sessions would be the next schema change if needed.
 - **Notification delivery** — follow-ups are visible in-app only; email/Teams notifications need a delivery channel decision.
+
+
+---
+
+## ADR-015 — Simplify to Today + Work and a focused meeting
+
+**Context:** The first implementation exposed seven equal navigation destinations, a three-panel meeting screen, duplicate status/complete/review indicators, an overview-style home, and several peripheral workflows. The product review found that users had to understand the application's organization before doing their work. There was no usage evidence that intake, Kanban, or transcript processing should be removed outright, so the decision was to simplify the default experience while preserving data and pilot access.
+
+**Decision:**
+
+1. Reduce primary navigation to **Today** and **Work**. Past standups, project settings, intake, transcript review and the legacy board become contextual or pilot tools.
+2. Make Today act, not summarize: one state-aware standup action, one server-ordered attention queue, a short current-work preview for employees, and one optional “Anything changed?” composer. Remove pulse tiles, duplicate task lists, recent-history panels and manager “My work”.
+3. Replace the pre-meeting questionnaire with a date-scoped `daily_updates` row (one upsert per user/day) and make “Needs help” create a durable blocker rather than storing blocker text on the participant.
+4. Make Today and the meeting share one attention definition and ordering (`app/services/attention.py`).
+5. Turn the meeting into a focused, navigation-free mode: compact person selector, on-demand roster, one main workspace and a contextual capture drawer. Keep one review indicator and one Finish action.
+6. Retire the participant follow-up flag from new UI use; use owned action items. Preserve old flags in history.
+7. Make session history outcome-first: Next actions, Unresolved help needed, Decisions. Collapse progress, participant reporting, facts and audit.
+8. Replace the default Kanban with a Work list; keep the board at `/legacy/board` during the pilot. Redirect old URLs.
+9. Keep intake, AI and project settings behind Pilot tools; make AI proposals human-readable instead of JSON, preserving approval, evidence, duplicate/ambiguity and stale-version safeguards.
+
+**Consequences:**
+
+- The default surface has two destinations and one dominant action per workflow step.
+- Daily updates gain a new table (`daily_updates`) and employees can create taskless help requests.
+- The pre-meeting API, board, intake, transcripts, proposals, participant flags and all audit/history data remain. Nothing was destructively migrated.
+- The server now defines attention, reducing dashboard/meeting inconsistency and enabling full-set pagination.
+- Full capture idempotency keys remain a follow-up; daily updates are upserts and the UI guards double submission.
+- Phase 4 removals (deleting legacy modules/data) are explicitly deferred until a pilot confirms no one relies on them.
+
+**Status:** Implemented in the current codebase; pilot pending.

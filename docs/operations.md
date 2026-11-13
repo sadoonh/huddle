@@ -71,7 +71,7 @@ Frontend: `VITE_API_BASE` (default `/api/v1`).
 
 ## 3. Database migrations
 
-Alembic is the schema authority.
+Alembic is the schema authority. The schema includes `daily_updates` (one optional update per employee per day) in addition to the original standup/task tables.
 
 ```bash
 cd backend
@@ -228,12 +228,30 @@ Never bypass the check by editing the task's stored version.
 3. Introduce RDS Proxy.
 4. Check for a runaway worker (concurrency cap is 2).
 
-### Employee cannot submit a pre-meeting update
+### Daily update does not appear in the meeting
 
+1. Confirm the row exists for the participant and the session date:
+   `daily_updates.user_id`, `daily_updates.update_date`.
+2. The meeting workspace reads the session date, not “today” unconditionally. Historical sessions will not show a new daily update.
+3. The employee can also report changes through a task update; those appear in recent updates even if the daily update is missing.
+4. If the session is completed, the meeting is read-only; check the outcome page instead.
+
+### “Needs help” does not carry forward
+
+- Confirm a `blockers` row was created (`POST /api/v1/blockers`), not only participant text.
+- Confirm `status='open'` and the task/owner/reporter relationship matches the viewing scope.
+- Taskless team blockers are visible to managers and to the employee who reported them.
+- Resolving the blocker removes it from later meetings by design.
+
+### Employee cannot submit a legacy pre-meeting update
+
+The legacy API remains for compatibility:
 - Session may be completed → closed.
 - The employee may already be reviewed → closed.
 - The user may not be a participant.
 - The update is self-only (admin can override).
+
+The simplified UI no longer uses this endpoint; use the daily update composer instead.
 
 ### Task edit returns 409
 

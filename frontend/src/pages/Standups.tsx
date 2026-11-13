@@ -6,47 +6,24 @@ import {
   Loading,
   PageHeader,
   SessionStatusBadge,
-  Spinner,
 } from '../components/ui'
 import { api } from '../lib/api'
 import { formatDate } from '../lib/format'
 import { useAsync } from '../lib/hooks'
-import { useAuth } from '../lib/auth'
-import { useToast } from '../lib/toast'
 import type { Page, Session, SessionDetail } from '../lib/types'
-import { useState } from 'react'
 
 export default function StandupsPage() {
-  const { isManager } = useAuth()
-  const { push } = useToast()
-  const navigate = useNavigate()
-  const [busy, setBusy] = useState(false)
   const sessions = useAsync<Page<Session>>(() => api.get('/standups/sessions?limit=60'), [])
-
-  async function openToday() {
-    setBusy(true)
-    try {
-      const existing = await api.get<SessionDetail | null>('/standups/today')
-      const session = existing ?? (await api.post<SessionDetail>('/standups/sessions', {}))
-      navigate(session.status === 'completed' ? `/standups/${session.id}` : `/standups/${session.id}/live`)
-    } catch (caught) {
-      push((caught as Error).message, 'error')
-    } finally {
-      setBusy(false)
-    }
-  }
 
   return (
     <div>
       <PageHeader
-        title="Standup history"
-        subtitle="Every session is preserved with its structured outcomes and audit trail."
+        title="Past standups"
+        subtitle="Session outcomes, actions and still-open help requests."
         actions={
-          isManager && (
-            <button type="button" className="btn btn-primary" onClick={openToday} disabled={busy}>
-              {busy ? <Spinner /> : <Icon name="play" />} Open today&apos;s standup
-            </button>
-          )
+          <Link to="/" className="btn btn-secondary">
+            <Icon name="arrowLeft" /> Today
+          </Link>
         }
       />
 

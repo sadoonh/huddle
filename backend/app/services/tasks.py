@@ -316,18 +316,13 @@ def create_blocker(
     *,
     session_id: str | None = None,
     audit_source: AuditSource = AuditSource.TASK_INTERFACE,
-    attributed_to_user_id: str | None = None,
 ) -> Blocker:
     task: Task | None = None
     if payload.task_id:
         task = get_task_or_404(db, payload.task_id)
         ensure_task_editable(user, task)
-    else:
-        if not is_manager(user):
-            raise ForbiddenError("Only managers can report a blocker without a task")
-        if payload.project_id:
-            project = get_project_or_404(db, payload.project_id)
-            ensure_project_visible(user, project)
+    elif payload.project_id:
+        ensure_project_visible(user, get_project_or_404(db, payload.project_id))
 
     if payload.owner_id:
         get_user_or_404(db, payload.owner_id)
@@ -336,7 +331,7 @@ def create_blocker(
         task_id=payload.task_id,
         project_id=payload.project_id or (task.project_id if task else None),
         description=payload.description.strip(),
-        owner_id=payload.owner_id or attributed_to_user_id,
+        owner_id=payload.owner_id,
         reported_by_id=user.id,
         reported_session_id=session_id,
         status=BlockerStatus.OPEN,

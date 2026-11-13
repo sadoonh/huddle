@@ -5,14 +5,9 @@ import { humanize } from '../lib/format'
 import { Avatar } from './ui'
 import { Icon, type IconName } from './icons'
 
-const navigation: { to: string; label: string; icon: IconName; managerOnly?: boolean; end?: boolean }[] = [
-  { to: '/', label: 'Today', icon: 'calendar', end: true },
-  { to: '/standup/today', label: 'Live standup', icon: 'play', managerOnly: true },
-  { to: '/standups', label: 'Standup history', icon: 'history' },
-  { to: '/board', label: 'Task board', icon: 'board' },
-  { to: '/projects', label: 'Projects', icon: 'folder' },
-  { to: '/intake', label: 'Work intake', icon: 'inbox' },
-  { to: '/ai', label: 'Transcript review', icon: 'sparkles', managerOnly: true },
+const primary: { to: string; label: string; icon: IconName }[] = [
+  { to: '/', label: 'Today', icon: 'calendar' },
+  { to: '/work', label: 'Work', icon: 'board' },
 ]
 
 function IdentitySwitcher() {
@@ -64,35 +59,58 @@ export default function Layout() {
         </div>
       </div>
 
-      <nav className="flex-1 space-y-0.5 overflow-y-auto px-2.5 pb-4">
+      <nav className="flex-1 space-y-0.5 overflow-y-auto px-2.5 pb-4" aria-label="Primary">
         <p className="px-2 pb-1.5 pt-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-          Workspace
+          Daily
         </p>
-        {navigation
-          .filter((item) => !item.managerOnly || isManager)
-          .map((item) => {
-            const isLivePath =
-              location.pathname === '/standup/today' || location.pathname.endsWith('/live')
-            const active =
-              item.to === '/'
-                ? location.pathname === '/'
-                : item.to === '/standup/today'
-                  ? isLivePath
-                  : item.to === '/standups'
-                    ? location.pathname.startsWith('/standups') && !isLivePath
-                    : location.pathname === item.to || location.pathname.startsWith(`${item.to}/`)
-            return (
-              <Link
-                key={item.to}
-                to={item.to}
-                onClick={() => setMobileOpen(false)}
-                className={`nav-item ${active ? 'nav-item-active' : ''}`}
-              >
-                <Icon name={item.icon} className="h-4 w-4 shrink-0" />
-                {item.label}
+        {primary.map((item) => {
+          const active =
+            item.to === '/'
+              ? location.pathname === '/'
+              : location.pathname.startsWith('/work') || location.pathname.startsWith('/legacy/board')
+          return (
+            <Link
+              key={item.to}
+              to={item.to}
+              onClick={() => setMobileOpen(false)}
+              className={`nav-item ${active ? 'nav-item-active' : ''}`}
+            >
+              <Icon name={item.icon} className="h-4 w-4 shrink-0" />
+              {item.label}
+            </Link>
+          )
+        })}
+
+        <div className="mt-5 border-t border-white/10 pt-3">
+          <details className="group">
+            <summary className="flex cursor-pointer list-none items-center justify-between rounded-lg px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500 hover:text-slate-300">
+              Pilot tools
+              <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open:rotate-90" />
+            </summary>
+            <div className="mt-1 space-y-0.5">
+              <Link to="/intake" onClick={() => setMobileOpen(false)} className="nav-item text-xs">
+                <Icon name="inbox" className="h-3.5 w-3.5 shrink-0" />
+                Work intake
               </Link>
-            )
-          })}
+              {isManager && (
+                <Link to="/ai" onClick={() => setMobileOpen(false)} className="nav-item text-xs">
+                  <Icon name="sparkles" className="h-3.5 w-3.5 shrink-0" />
+                  Transcript review
+                </Link>
+              )}
+              <Link to="/legacy/board" onClick={() => setMobileOpen(false)} className="nav-item text-xs">
+                <Icon name="board" className="h-3.5 w-3.5 shrink-0" />
+                Legacy board
+              </Link>
+              {isManager && (
+                <Link to="/settings/projects" onClick={() => setMobileOpen(false)} className="nav-item text-xs">
+                  <Icon name="folder" className="h-3.5 w-3.5 shrink-0" />
+                  Project settings
+                </Link>
+              )}
+            </div>
+          </details>
+        </div>
       </nav>
 
       <div className="space-y-2 border-t border-white/10 p-3">
@@ -110,32 +128,25 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen bg-slate-100">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 lg:block">{sidebar}</aside>
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-52 lg:block">{sidebar}</aside>
 
       {mobileOpen && (
         <div className="fixed inset-0 z-40 lg:hidden">
           <div className="absolute inset-0 bg-slate-950/50" onClick={() => setMobileOpen(false)} />
-          <aside className="absolute inset-y-0 left-0 w-64">{sidebar}</aside>
+          <aside className="absolute inset-y-0 left-0 w-56">{sidebar}</aside>
         </div>
       )}
 
-      <div className="lg:pl-60">
+      <div className="lg:pl-52">
         <header className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-100/90 px-4 py-2.5 backdrop-blur lg:hidden">
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setMobileOpen(true)}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setMobileOpen(true)} aria-label="Open navigation">
             <Icon name="menu" className="h-5 w-5" />
           </button>
           <span className="text-sm font-semibold">Standup</span>
           <Avatar name={me?.full_name ?? '?'} size="sm" />
         </header>
 
-        <main
-          key={location.pathname}
-          className={`mx-auto w-full px-4 py-5 sm:px-6 ${
-            location.pathname.endsWith('/live') || location.pathname === '/standup/today'
-              ? 'max-w-[1600px]'
-              : 'max-w-7xl'
-          }`}
-        >
+        <main className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6">
           <Outlet />
         </main>
       </div>

@@ -43,8 +43,8 @@ export default function ProjectsPage() {
   return (
     <div>
       <PageHeader
-        title="Projects"
-        subtitle="Minimal project context: ownership, members and the tasks that support the standup."
+        title="Project settings"
+        subtitle="Ownership, members and task context. Reachable from Work."
         actions={
           isManager && (
             <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>
