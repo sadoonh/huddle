@@ -1,0 +1,29 @@
+# Copy to terraform.tfvars (git-ignored) and fill from the nex platform team.
+
+project_name = "nex-standup"
+environment  = "dev"
+aws_region   = "us-east-1"
+
+# Existing nex network
+vpc_id             = "vpc-xxxxxxxx"
+private_subnet_ids = ["subnet-aaaaaaaa", "subnet-bbbbbbbb"]
+
+# Backend image (push via CI, then pin the immutable tag)
+api_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/nex-standup-dev-api:release-20260101"
+
+# Restrict this to the nex portal origin in real environments.
+cors_origins = ["https://nex.internal.example"]
+
+# Database — use a secret manager / CI variable, never commit the real value.
+db_password         = "REPLACE_ME"
+db_instance_class   = "db.t4g.micro"
+db_allocated_storage = 20
+db_multi_az         = false
+
+# AI
+ai_provider          = "mock"
+bedrock_model_id     = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+transcript_retention_days = 90
+
+# Optional SNS ARNs
+alarm_actions = []
