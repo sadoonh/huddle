@@ -33,3 +33,6 @@ infra/terraform/terraform.tfvars
 .DS_Store
 .idea/
 .vscode/
+
+# Local launcher logs
+.dev/

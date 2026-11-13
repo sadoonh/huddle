@@ -3,6 +3,17 @@
 ## 1. Local development
 
 ```bash
+./start.sh      # one command: installs, seeds if needed, runs API + web
+```
+
+`start.sh` is idempotent: it reuses the venv, `node_modules` and existing data,
+verifies both services are healthy, and cleans up both child processes on
+Ctrl+C. Use `NO_OPEN=1`, `RESET=1`, `API_PORT=…` or `WEB_PORT=…` as needed.
+Logs: `.dev/api.log`, `.dev/web.log`.
+
+Manual equivalent:
+
+```bash
 make setup      # backend .venv + frontend node_modules
 make seed       # demo analytics team (destructive: drops and rebuilds local tables)
 make api        # http://localhost:8000, docs at /api/docs

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,7 +37,9 @@ class Settings(BaseSettings):
     nex_roles_header: str = "X-Nex-Roles"
 
     # --- HTTP -------------------------------------------------------------
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
+    # Comma-separated list; kept as a string so pydantic-settings does not try
+    # to JSON-decode it from the environment.
+    cors_origins: str = "http://localhost:5173"
     api_prefix: str = "/api/v1"
 
     # --- AI transcript reconciliation (Phase 4) ---------------------------
@@ -57,12 +58,9 @@ class Settings(BaseSettings):
     # A task due within this many days counts as "upcoming" on the standup board.
     upcoming_due_days: int = 3
 
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def _split_origins(cls, value: object) -> object:
-        if isinstance(value, str):
-            return [part.strip() for part in value.split(",") if part.strip()]
-        return value
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [part.strip() for part in self.cors_origins.split(",") if part.strip()]
 
     @property
     def is_sqlite(self) -> bool:

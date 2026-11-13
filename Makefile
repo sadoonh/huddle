@@ -2,9 +2,10 @@ SHELL := /bin/bash
 BACKEND := backend
 FRONTEND := frontend
 
-.PHONY: help setup backend-install frontend-install seed api web test backend-test backend-lint frontend-check lint build db-upgrade db-revision docker-up docker-down clean
+.PHONY: help start setup backend-install frontend-install seed api web test backend-test backend-lint frontend-check lint build db-upgrade db-revision docker-up docker-down clean
 
 help:
+	@echo "start            one command: install deps, seed, run API + web"
 	@echo "setup            install backend + frontend dependencies"
 	@echo "seed             reset and seed the local demo workspace"
 	@echo "api              run FastAPI on :8000"
@@ -16,6 +17,9 @@ help:
 	@echo "db-revision      autogenerate a migration (m=\"message\")"
 	@echo "docker-up        full stack in docker-compose (:8080)"
 	@echo "docker-down      stop the compose stack"
+
+start:
+	@./start.sh
 
 setup: backend-install frontend-install
 

@@ -91,7 +91,29 @@ More screenshots: [session summary](docs/screenshots/session-summary.png), [empl
 - Node.js 20+ and npm
 - PostgreSQL only if you want to run against Postgres locally (SQLite is the default)
 
-### Local development (SQLite)
+### One command (SQLite, no Postgres needed)
+
+```bash
+./start.sh        # or: make start   (macOS, Linux, WSL or Git Bash)
+```
+
+That single command checks Python/Node, creates the virtualenv and installs
+missing dependencies, seeds the demo data if the database is empty, starts the
+API and Vite, waits for both to be healthy, and opens <http://localhost:5173>.
+Ctrl+C stops both processes. Run it again any time — dependencies and data are
+reused.
+
+Optional knobs:
+
+```bash
+NO_OPEN=1 ./start.sh                    # don't open a browser
+RESET=1 ./start.sh                      # rebuild the demo data (destructive)
+API_PORT=8001 WEB_PORT=5174 ./start.sh  # avoid port clashes
+```
+
+Logs are written to `.dev/api.log` and `.dev/web.log`.
+
+### Manual development (if you prefer two terminals)
 
 ```bash
 make setup        # backend venv + frontend node_modules
