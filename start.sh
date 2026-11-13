@@ -10,7 +10,9 @@
 # reused.
 #
 # Optional environment variables:
-#   API_PORT=8000   WEB_PORT=5173   NO_OPEN=1   RESET=1
+#   API_PORT=8000   WEB_PORT=5173   NO_OPEN=1   RESET=1   STOP=1
+#
+#   STOP=1 ./start.sh   stop a launcher instance that is already running
 #
 set -euo pipefail
 
@@ -21,6 +23,7 @@ API_PORT="${API_PORT:-8000}"
 WEB_PORT="${WEB_PORT:-5173}"
 NO_OPEN="${NO_OPEN:-0}"
 RESET="${RESET:-0}"
+STOP="${STOP:-0}"
 
 DEV_DIR="$ROOT/.dev"
 mkdir -p "$DEV_DIR"
@@ -34,6 +37,52 @@ fi
 say()  { printf "${GREEN}▸${NC} %s\n" "$*"; }
 warn() { printf "${YELLOW}!${NC} %s\n" "$*"; }
 die()  { printf "${RED}✗${NC} %s\n" "$*" >&2; exit 1; }
+
+port_in_use() {
+  "$1" - "$2" <<'PY'
+import socket, sys
+sock = socket.socket()
+try:
+    in_use = sock.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0
+finally:
+    sock.close()
+raise SystemExit(0 if in_use else 1)
+PY
+}
+
+processes_on_port() {
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -ti "tcp:$1" 2>/dev/null || true
+  elif command -v fuser >/dev/null 2>&1; then
+    fuser "$1"/tcp 2>/dev/null | tr ' ' '\n' || true
+  fi
+}
+
+stop_port() {
+  pids="$(processes_on_port "$1")"
+  if [ -n "$pids" ]; then
+    # shellcheck disable=SC2086
+    kill $pids 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      if ! port_in_use "$PYTHON" "$1"; then return 0; fi
+      sleep 0.3
+    done
+    # shellcheck disable=SC2086
+    kill -9 $pids 2>/dev/null || true
+  fi
+}
+
+api_is_ours() {
+  "$PYTHON" - "$1" <<'PY'
+import json, sys, urllib.request
+try:
+    with urllib.request.urlopen(f"http://127.0.0.1:{sys.argv[1]}/health", timeout=1) as response:
+        payload = json.load(response)
+    raise SystemExit(0 if payload.get("service") == "nex-standup" else 1)
+except Exception:
+    raise SystemExit(1)
+PY
+}
 
 API_PID=""
 WEB_PID=""
@@ -52,6 +101,7 @@ cleanup() {
   if [ -n "${API_PID:-}" ]; then
     wait "$API_PID" 2>/dev/null || true
   fi
+  rm -f "$DEV_DIR/api.pid" "$DEV_DIR/web.pid"
 }
 trap cleanup EXIT
 trap 'cleanup; exit 0' INT TERM
@@ -77,6 +127,55 @@ fi
 
 if [ -z "$PYTHON" ]; then
   die "Python 3.10–3.13 is required. Install one, or install uv (https://docs.astral.sh/uv/)."
+fi
+
+if [ "$STOP" = "1" ]; then
+  say "Stopping Standup…"
+  stopped=0
+  for pidfile in "$DEV_DIR/api.pid" "$DEV_DIR/web.pid"; do
+    if [ -f "$pidfile" ]; then
+      pid="$(cat "$pidfile" 2>/dev/null || true)"
+      if [ -n "$pid" ]; then
+        kill "$pid" 2>/dev/null || true
+        stopped=1
+      fi
+      rm -f "$pidfile"
+    fi
+  done
+  if api_is_ours "$API_PORT"; then
+    stop_port "$API_PORT"
+    stopped=1
+  fi
+  if [ "$stopped" = "1" ] && port_in_use "$PYTHON" "$WEB_PORT"; then
+    stop_port "$WEB_PORT"
+  fi
+  if [ "$stopped" = "1" ]; then
+    say "Stopped. Ports $API_PORT and $WEB_PORT are free."
+  else
+    say "No running Standup instance found on ports $API_PORT/$WEB_PORT."
+  fi
+  exit 0
+fi
+
+# If this app already owns the ports, do not touch dependencies or the database.
+if port_in_use "$PYTHON" "$API_PORT"; then
+  if api_is_ours "$API_PORT" && port_in_use "$PYTHON" "$WEB_PORT"; then
+    APP_URL="http://localhost:$WEB_PORT"
+    say "Standup is already running at $APP_URL"
+    if [ "$NO_OPEN" != "1" ]; then
+      if command -v open >/dev/null 2>&1; then
+        open "$APP_URL" >/dev/null 2>&1 || true
+      elif command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "$APP_URL" >/dev/null 2>&1 || true
+      fi
+    fi
+    echo "  Use STOP=1 ./start.sh (or make stop) to stop it, then start again."
+    exit 0
+  fi
+  die "Port $API_PORT is in use. Stop the existing instance with: STOP=1 ./start.sh (or make stop), or choose API_PORT=8001 WEB_PORT=5174."
+fi
+if port_in_use "$PYTHON" "$WEB_PORT"; then
+  die "Port $WEB_PORT is in use. Stop the existing instance with: STOP=1 ./start.sh (or make stop), or choose API_PORT=8001 WEB_PORT=5174."
 fi
 
 command -v node >/dev/null 2>&1 || die "Node.js 18+ is required. Install it from https://nodejs.org/."
@@ -174,27 +273,6 @@ else
     || die "Could not prepare the database."
 fi
 
-# ---------------------------------------------------------------------------
-# Port checks
-# ---------------------------------------------------------------------------
-port_in_use() {
-  "$VENV_PY" - "$1" <<'PY'
-import socket, sys
-sock = socket.socket()
-try:
-    in_use = sock.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0
-finally:
-    sock.close()
-raise SystemExit(0 if in_use else 1)
-PY
-}
-
-if port_in_use "$API_PORT"; then
-  die "Port $API_PORT is already in use. Try: API_PORT=8001 WEB_PORT=5174 ./start.sh"
-fi
-if port_in_use "$WEB_PORT"; then
-  die "Port $WEB_PORT is already in use. Try: API_PORT=8001 WEB_PORT=5174 ./start.sh"
-fi
 
 # ---------------------------------------------------------------------------
 # Start
@@ -237,6 +315,7 @@ say "Starting API on port $API_PORT…"
   exec "$VENV_PY" -m uvicorn app.main:app --host 127.0.0.1 --port "$API_PORT"
 ) > "$DEV_DIR/api.log" 2>&1 &
 API_PID=$!
+echo "$API_PID" > "$DEV_DIR/api.pid"
 
 wait_for_http "http://127.0.0.1:$API_PORT/health" "$API_PID" "$DEV_DIR/api.log" \
   || die "The API did not start."
@@ -248,6 +327,7 @@ say "Starting web app on port $WEB_PORT…"
   exec ./node_modules/.bin/vite --host 127.0.0.1 --port "$WEB_PORT" --strictPort
 ) > "$DEV_DIR/web.log" 2>&1 &
 WEB_PID=$!
+echo "$WEB_PID" > "$DEV_DIR/web.pid"
 
 wait_for_http "http://127.0.0.1:$WEB_PORT/" "$WEB_PID" "$DEV_DIR/web.log" \
   || die "The web app did not start."

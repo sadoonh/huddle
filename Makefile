@@ -2,10 +2,11 @@ SHELL := /bin/bash
 BACKEND := backend
 FRONTEND := frontend
 
-.PHONY: help start setup backend-install frontend-install seed api web test backend-test backend-lint frontend-check lint build db-upgrade db-revision docker-up docker-down clean
+.PHONY: help start stop setup backend-install frontend-install seed api web test backend-test backend-lint frontend-check lint build db-upgrade db-revision docker-up docker-down clean
 
 help:
 	@echo "start            one command: install deps, seed, run API + web"
+	@echo "stop             stop a running ./start.sh instance"
 	@echo "setup            install backend + frontend dependencies"
 	@echo "seed             reset and seed the local demo workspace"
 	@echo "api              run FastAPI on :8000"
@@ -20,6 +21,9 @@ help:
 
 start:
 	@./start.sh
+
+stop:
+	@STOP=1 ./start.sh
 
 setup: backend-install frontend-install
 

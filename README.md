@@ -147,6 +147,8 @@ Options:
 NO_OPEN=1 ./start.sh
 RESET=1 ./start.sh                      # rebuild demo data (destructive)
 API_PORT=8001 WEB_PORT=5174 ./start.sh
+./start.sh                              # if already running, opens/uses it
+make stop                               # stop a running launcher instance
 ```
 
 Logs: `.dev/api.log`, `.dev/web.log`.

@@ -8,8 +8,10 @@
 
 `start.sh` is idempotent: it reuses the venv, `node_modules` and existing data,
 verifies both services are healthy, and cleans up both child processes on
-Ctrl+C. Use `NO_OPEN=1`, `RESET=1`, `API_PORT=…` or `WEB_PORT=…` as needed.
-Logs: `.dev/api.log`, `.dev/web.log`.
+Ctrl+C. If the app is already running, it reports the URL and exits rather than
+failing on a port conflict. Use `make stop` (or `STOP=1 ./start.sh`) to stop it.
+Use `NO_OPEN=1`, `RESET=1`, `API_PORT=…` or `WEB_PORT=…` as needed.
+Logs: `.dev/api.log`, `.dev/web.log`; PID files: `.dev/api.pid`, `.dev/web.pid`.
 
 Manual equivalent:
 
