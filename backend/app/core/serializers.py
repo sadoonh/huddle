@@ -45,6 +45,7 @@ from app.schemas.tasks import (
     TaskUpdateOut,
     TranscriptOut,
 )
+from app.schemas.today import DailyUpdateOut
 
 
 def user_brief(user: User | None) -> UserBrief | None:
@@ -54,7 +55,9 @@ def user_brief(user: User | None) -> UserBrief | None:
 
 
 def task_update_out(update: TaskUpdate) -> TaskUpdateOut:
-    return TaskUpdateOut.model_validate(update)
+    out = TaskUpdateOut.model_validate(update)
+    out.task_title = update.task.title if update.task else None
+    return out
 
 
 def task_out(task: Task) -> TaskOut:
@@ -101,11 +104,15 @@ def participant_out(
     open_blocker_count: int = 0,
     open_action_item_count: int = 0,
     has_daily_update: bool = False,
+    daily_update=None,
 ) -> ParticipantOut:
     out = ParticipantOut.model_validate(participant)
     out.open_blocker_count = open_blocker_count
     out.open_action_item_count = open_action_item_count
     out.has_daily_update = has_daily_update
+    out.daily_update = (
+        DailyUpdateOut.model_validate(daily_update) if daily_update is not None else None
+    )
     return out
 
 

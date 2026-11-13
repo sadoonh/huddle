@@ -1,6 +1,6 @@
 # API reference
 
-Base path: `/api/v1` (configurable via `API_PREFIX`). Interactive OpenAPI: `/api/docs`, schema: `/api/openapi.json`. Health endpoints live outside the prefix: `/health`, `/health/ready`.
+Base path: `/api/v1` (configurable via `API_PREFIX`). Interactive OpenAPI: `/api/docs`, schema: `/api/openapi.json`. Health endpoints live outside the prefix: `/health`, `/health/ready`. `GET /meta` returns the server `business_date` (UTC team day) used by the UI for due/overdue labels.
 
 ## 1. Conventions
 
@@ -95,19 +95,27 @@ Attention items are deduplicated: a task with a blocker, overdue date, at-risk f
 
 ```json
 {
+  "business_date": "2026-11-13",
   "session": {"id": "...", "status": "draft", "reviewed_count": 0, "participant_count": 4},
   "daily_update": {"progress": "Dashboard validation is complete.", "next_steps": null},
   "attention": {
     "items": [
       {
         "kind": "task",
+        "kind": "task",
         "id": "...",
         "task_id": "...",
+        "focus_id": "blocker-id",
         "title": "Attribution model v2",
         "detail": "Warehouse access missing for the marketing schema.",
         "owner": {"id": "...", "full_name": "Jordan Lee", "role": "employee"},
+        "reporter": {"id": "...", "full_name": "Maya Chen", "role": "manager"},
         "reason": "blocker",
         "reasons": ["blocker", "at_risk", "follow_up"],
+        "issues": [
+          {"kind": "blocker", "id": "blocker-id", "label": "Help request", "detail": "Warehouse access missing..."},
+          {"kind": "action_item", "id": "action-id", "label": "Follow-up", "detail": "Jordan to request access"}
+        ],
         "due_date": "2026-11-17",
         "age_days": 3,
         "task_status": "in_progress",
@@ -158,12 +166,28 @@ One row per user/date; repeating the call updates the same row and records `dail
 | PATCH | `/tasks/{id}` | assignee/creator/manager | supports `expected_version` |
 | PATCH | `/tasks/{id}/status` | assignee/manager | `{status, expected_version?}` |
 | GET | `/tasks/{id}/updates` | visible | newest first |
-| POST | `/tasks/{id}/updates` | assignee/manager | append-only progress update |
+| POST | `/tasks/{id}/updates` | assignee/manager | append-only update; optional atomic status change, expected version and `client_operation_id` |
 | POST | `/tasks/{id}/blockers` | assignee/manager | creates an open blocker; status unchanged |
 | GET | `/tasks/{id}/activity` | visible | audit events for the task + related blockers/actions/decisions |
 | GET | `/tasks/{id}/history` | visible | progress updates (alias for the updates view) |
 
 Task filters: `project_id`, `assignee_id`, repeated `status`, `priority`, `blocked=true`, `overdue=true`, `q` (title substring), `limit`, `offset`.
+
+### Atomic update + retry safety
+
+`POST /tasks/{id}/updates` accepts:
+
+```json
+{
+  "progress": "Validated Q4 totals.",
+  "next_steps": "Publish tomorrow.",
+  "status": "done",
+  "expected_version": 3,
+  "client_operation_id": "9f6c3e2a-..."
+}
+```
+
+The progress row and optional status change commit in one transaction. A stale `expected_version` returns `409` and writes neither. Repeating the call with the same `client_operation_id` returns the original update instead of creating a duplicate. Create endpoints (`POST /tasks`, `/blockers`, `/action-items`, `/decisions`, session `/notes`) accept the same retry id.
 
 ### Task lifecycle
 
@@ -219,7 +243,7 @@ Resolving a blocker preserves task status and records `resolved_at`, `resolved_b
 | Method | Path | Role | Notes |
 |---|---|---|---|
 | GET | `/standups/today` | any | today's session or `null` |
-| GET | `/standups/sessions?status=` | manager all, employee participating | paginated, newest first, includes open counts |
+| GET | `/standups/sessions?status=&start=&end=` | manager all, employee participating | paginated, newest first, date range, open counts |
 | POST | `/standups/sessions` | manager | `{session_date?, participant_ids?, facilitator_id?}` |
 | GET | `/standups/sessions/{id}` | participant/manager | participants + pre-meeting notes |
 | POST | `/standups/sessions/{id}/start` | manager | idempotent if already in progress |
@@ -385,6 +409,10 @@ Managers see the full trail. Employees see events they acted on, events in sessi
 }
 ```
 
+### Retry ids
+
+All create commands accept an optional `client_operation_id` (max 64 chars, unique). Reuse the same id for a retry of the same logical submission; use a new id for a new record. Daily updates are upserts keyed by user + date.
+
 ### UI review
 
 The frontend presents proposals as human-readable before/after changes (task, owner, status, description) rather than JSON. The API shape above is unchanged.
@@ -410,5 +438,6 @@ The proposal is persisted as `failed` with `failure_reason`; the task keeps its 
 |---|---|---|
 | GET | `/health` | liveness; service/environment |
 | GET | `/health/ready` | executes `SELECT 1` against the database |
+| GET | `/meta` | server business date used for date/overdue labels (no auth required) |
 
 These endpoints are intentionally unauthenticated for load balancers and monitoring.

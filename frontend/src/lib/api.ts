@@ -30,7 +30,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
   headers.set('X-Dev-User', getDevUser())
 
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers })
+  const response = await fetch(`${API_BASE}${path}`, { cache: 'no-store', ...options, headers })
   if (!response.ok) {
     let detail = response.statusText
     let code: string | undefined

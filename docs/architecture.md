@@ -69,6 +69,14 @@ app/ai/             extractor interface, mock extractor, Bedrock adapter
 
 Routers are thin. Services receive `(db, user, payload)` and either return ORM/serialized objects or raise domain errors (`NotFoundError`, `ForbiddenError`, `ConflictError`, `DomainValidationError`). A single exception handler in `main.py` maps them to JSON with `{detail, code, details}`.
 
+### Interaction shell and overlays
+
+The app uses a compact header (brand, Today, Work, account) rather than a persistent sidebar. Pilot tools are compiled out of normal production builds unless `VITE_ENABLE_PILOT=true`; development identity controls only appear when `AUTH_MODE=dev`.
+
+`Modal` and `Drawer` share one portal-based behavior: labelled dialog, initial focus, trapped focus, inert background, body scroll lock, topmost-only Escape, and focus restoration. Confirmations use the same primitive, so a nested discard prompt consumes Escape instead of closing the underlying task.
+
+Work keeps its search, filters, pagination and selected task in the URL. Today, Work and the meeting share one task detail surface and one capability model.
+
 ### Transaction model
 
 `get_db()` opens a SQLAlchemy session per request and commits once on success:
@@ -87,7 +95,9 @@ finally:
 Services only `flush()`. Consequences:
 
 - A task mutation and its audit event commit atomically.
+- A progress update and an optional status change commit in one transaction; a stale version rolls back both.
 - Multi-row operations (creating a session and its participants, applying a proposal and recording audit) are atomic.
+- Create/update commands accept a unique `client_operation_id`. Reusing it for the same logical submission returns the original row instead of duplicating progress, tasks, help requests, follow-ups, decisions or notes.
 - AI conflict handling is the one deliberate exception: when an apply fails with a conflict, the service marks the proposal `failed`, commits that state, and then raises `409`. This preserves the failure for the reviewer instead of rolling it back.
 
 ### SQLite / PostgreSQL portability
@@ -129,7 +139,7 @@ Project visibility also considers ownership and `project_members`. Task visibili
 
 Today writes two kinds of input without requiring a meeting:
 
-- **Daily update** — one optional `daily_updates` row per user per day. `PUT /daily-updates/today` upserts, so retries update rather than duplicate. The meeting workspace reads the participant's update for the session date.
+- **Daily update** — one optional `daily_updates` row per user per day. `PUT /daily-updates/today` upserts, so retries update rather than duplicate. The meeting workspace reads the participant's update for the session date, and session detail exposes it under participant reporting.
 - **Help request** — “Needs help” creates a Blocker, task-linked or team-wide. Employees may create either (with project visibility enforced). It is durable and carries forward; it is not stored only as participant text.
 
 Task-specific updates use the existing append-only task update endpoint with source `task_interface`, so they appear in the meeting's recent updates without a second submission.
@@ -175,13 +185,19 @@ The meeting route (`/standups/:id/live`) is rendered outside the global layout. 
 - blockers/action items/decisions inherit `session_id`. Owners are explicitly selected where relevant; the UI does not silently infer who can resolve a blocker.
 - Notes are stored as `session_notes`.
 - Every capture writes an audit event with `source=manager_action` and the session id.
-- Switching participants while a draft exists prompts before discarding it; “Reviewed & next” marks only the current participant and advances.
+- Switching participants while a draft exists prompts before discarding it; “Mark reviewed & next” marks only the current participant and advances. Accidental reviews can be undone from the roster.
+- Capture freezes the task version when the draft opens. Background workspace refreshes cannot silently move the expected version; conflicts require **Load latest state** and a deliberate re-save.
+- SPA Back while a draft is open uses a same-URL history guard and the in-app discard confirmation.
 
 ### 5.5 Outcome-first history
 
-The session page leads with Next actions, Unresolved help needed and Decisions from `GET .../outcomes`. Progress records, participant reporting, facts/notes and audit are collapsed details. The stored deterministic summary remains available in the facts section. Outcomes distinguish “recorded in this meeting” from “still open now”; finishing never closes commitments.
+The session page leads with Next actions, Unresolved help needed and Decisions from `GET .../outcomes`. Progress records, captured notes, participant reporting (including daily updates), facts/notes and audit are one lazy-loaded **Meeting details** region. The stored deterministic summary remains in that region. Taskless help requests can be resolved from outcomes when permitted, and actions/decisions link to their tasks. Outcomes distinguish “recorded in this meeting” from “still open now”; finishing never closes commitments.
 
-## 6. AI reconciliation pipeline
+## 6. Date semantics
+
+The API defines the team business day as the server's UTC date and exposes it at `GET /meta` (also on `/today`). The SPA uses that date for due/overdue and daily-update context. Timestamps remain UTC and are rendered in the browser's local time. Closed tasks with historical due dates show a date, not “overdue”. Standup cards include the year when it differs from the current year; history is date-filterable.
+
+## 7. AI reconciliation pipeline
 
 ```mermaid
 sequenceDiagram
@@ -220,7 +236,7 @@ sequenceDiagram
 
 The mock extractor exists for deterministic tests and offline demos. It is intentionally not presented as production-quality extraction; the Bedrock adapter is the production path.
 
-## 7. Concurrency and consistency
+## 8. Concurrency and consistency
 
 - **Task edits** accept `expected_version`. Mismatch → `409` with `current_version` and `expected_version`. Human UIs use this in the board/task editor; AI apply always enforces it.
 - **Session date** is unique, so a duplicate create returns `409` with the existing session id.
@@ -228,7 +244,7 @@ The mock extractor exists for deterministic tests and offline demos. It is inten
 - **No distributed locks.** A small team and optimistic checks are sufficient for the MVP. Real-time multi-manager synchronisation is deferred.
 - **Audit is append-only.** There are no update/delete endpoints for audit rows. Corrections create new records.
 
-## 8. Failure behaviour
+## 9. Failure behaviour
 
 | Failure | Behaviour |
 |---|---|
@@ -241,7 +257,7 @@ The mock extractor exists for deterministic tests and offline demos. It is inten
 | Transcript extraction error | transcript `failed`, error stored, audit event; job retried/DLQ |
 | AI apply conflict | proposal `failed`, failure reason, task untouched, `409` to caller |
 
-## 9. Performance and scaling notes
+## 10. Performance and scaling notes
 
 - Standup reads are bounded by team size and use `selectinload` for task relationships.
 - Aggregates (per-session open counts, per-participant blocker/action counts) are done with grouped queries, not N+1 loops.
@@ -249,6 +265,6 @@ The mock extractor exists for deterministic tests and offline demos. It is inten
 - Static frontend assets are served by nex/nginx, not Lambda.
 - The database holds all operational history; no separate search infrastructure is needed at this scale.
 
-## 10. Non-goals for this iteration
+## 11. Non-goals for this iteration
 
 Kubernetes, microservices, event sourcing, vector search, configurable workflow engines, separate authentication, Teams Graph retrieval, real-time collaboration. These are deferred until usage demonstrates a need.

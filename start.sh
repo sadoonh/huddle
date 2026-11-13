@@ -263,6 +263,15 @@ fi
 # ---------------------------------------------------------------------------
 # Data
 # ---------------------------------------------------------------------------
+say "Checking database schema…"
+if (cd "$ROOT/backend" && "$VENV_PY" -c 'from app.config import get_settings; raise SystemExit(0 if get_settings().is_sqlite else 1)'); then
+  (cd "$ROOT/backend" && "$VENV_PY" -m app.dev_schema >/dev/null 2>&1) \
+    || die "Could not upgrade the local SQLite schema. Run RESET=1 ./start.sh to rebuild the demo data."
+else
+  (cd "$ROOT/backend" && "$VENV_PY" -m alembic upgrade head >/dev/null 2>&1) \
+    || die "Could not apply database migrations."
+fi
+
 say "Preparing database…"
 if [ "$RESET" = "1" ]; then
   warn "RESET=1: rebuilding the demo workspace (local data will be replaced)."

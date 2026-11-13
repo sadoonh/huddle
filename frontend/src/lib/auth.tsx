@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { api, getDevUser, setDevUser } from './api'
+import { setBusinessDate } from './format'
 import type { Me, User } from './types'
 
 interface AuthValue {
@@ -30,6 +31,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .get<{ mode: string }>('/auth/config')
       .then((config) => setMode(config.mode))
       .catch(() => setMode('dev'))
+  }, [])
+
+  useEffect(() => {
+    api
+      .get<{ business_date: string }>('/meta')
+      .then((meta) => setBusinessDate(meta.business_date))
+      .catch(() => setBusinessDate(null))
   }, [])
 
   useEffect(() => {

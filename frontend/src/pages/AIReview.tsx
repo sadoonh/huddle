@@ -11,6 +11,7 @@ import { api } from '../lib/api'
 import { formatDateTime, humanize } from '../lib/format'
 import { useAsync } from '../lib/hooks'
 import { useAuth } from '../lib/auth'
+import { useSearchParams } from 'react-router-dom'
 import { useToast } from '../lib/toast'
 import type {
   Page,
@@ -46,9 +47,10 @@ export default function AIReviewPage() {
   const transcripts = useAsync<Transcript[]>(() => api.get('/ai/transcripts'), [])
   const sessions = useAsync<Page<Session>>(() => api.get('/standups/sessions?limit=30'), [])
   const users = useAsync<User[]>(() => api.get('/users'), [])
+  const [searchParams] = useSearchParams()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [file, setFile] = useState<File | null>(null)
-  const [sessionId, setSessionId] = useState('')
+  const [sessionId, setSessionId] = useState(searchParams.get('session') ?? '')
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)

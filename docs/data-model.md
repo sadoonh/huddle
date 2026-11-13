@@ -73,7 +73,9 @@ Indexes: `(assignee_id, status)`, `(project_id, status)`, `due_date`, `updated_a
 
 One row per progress report. Never overwritten.
 
-`task_id`, `author_id`, `attributed_to_user_id` (manager capturing on behalf of an employee), `session_id`, `source` (`pre_meeting`, `standup`, `task_interface`, `ai_approved`, `system`), `progress`, `next_steps`, `created_at`.
+`task_id`, `author_id`, `attributed_to_user_id` (manager capturing on behalf of an employee), `session_id`, `source` (`pre_meeting`, `standup`, `task_interface`, `ai_approved`, `system`), `progress`, `next_steps`, `client_operation_id`, `created_at`.
+
+`client_operation_id` is unique and nullable. A retry with the same id returns the original row; a different payload using the same id is rejected. The same retry key exists on tasks, blockers, action items, decisions and session notes.
 
 Index: `(task_id, created_at)`, `session_id`.
 
@@ -187,13 +189,14 @@ No update/delete API exists for audit rows. Corrections are new events.
 3. A “Needs help” action creates a blocker row; it is never only participant text.
 4. A session date is unique. A participant exists at most once per session.
 5. Completing a session does not change blocker/action-item state.
-6. `task_updates` and `audit_events` are append-only.
-7. A task edit and its audit event commit together.
-8. A task edit with a stale `expected_version` is rejected.
-9. An AI proposal can only be applied after approval, and only if `Task.version` still matches `base_task_version`.
-10. Action items/decisions/blockers keep the session they originated from even after later sessions.
-11. Task updates preserve `attributed_to_user_id` separately from the author, so manager-captured updates remain attributable to the employee.
-12. Users are never silently demoted by SSO headers.
+6. A logical create/update retry uses the same `client_operation_id` and cannot create a second record.
+7. `task_updates` and `audit_events` are append-only.
+8. A task edit and its audit event commit together.
+9. A task edit with a stale `expected_version` is rejected.
+10. An AI proposal can only be applied after approval, and only if `Task.version` still matches `base_task_version`.
+11. Action items/decisions/blockers keep the session they originated from even after later sessions.
+12. Task updates preserve `attributed_to_user_id` separately from the author, so manager-captured updates remain attributable to the employee.
+13. Users are never silently demoted by SSO headers.
 
 ## 4. Common queries
 
@@ -204,6 +207,8 @@ No update/delete API exists for audit rows. Corrections are new events.
 | Needs attention | task has open blocker OR `due_date < today` OR `is_at_risk` OR open action item |
 | Session review progress | `participants reviewed_at is not null / total` |
 | Today's short update | `daily_updates` where `user_id=?` and `update_date=today` |
+| Participant daily reporting | `daily_updates` for each participant at the session date |
+| Retried submission | lookup by unique `client_operation_id` before insert |
 | Team attention queue | shared `exception_reasons` + severity order in `app/services/attention.py` |
 | What did Alice report last week? | `standup_participants` for Alice join sessions in range; updates where `session_id` and (`attributed_to` or `author` = Alice) |
 | How did a task progress? | `task_updates` for task ordered by `created_at`; audit events for status/assignment changes |
@@ -211,7 +216,8 @@ No update/delete API exists for audit rows. Corrections are new events.
 
 ## 5. Migrations
 
-- Alembic is the schema authority. The initial migration creates all tables and indexes; a follow-up migration adds `daily_updates`.
+- Alembic is the schema authority. Migrations add the standup/task schema, `daily_updates`, and the unique `client_operation_id` indexes used for retry safety.
+- Local SQLite demo databases are upgraded by `app.dev_schema` (create missing tables/columns/indexes, then stamp head). PostgreSQL deployments use Alembic directly.
 - `alembic check` runs in CI against a fresh database to detect model/migration drift.
 - The API never calls `create_all` in production; `AUTO_INIT_DB` is false by default and SQLite auto-init is limited to local/test.
 - Timestamps are naive UTC, both in SQLite and PostgreSQL.

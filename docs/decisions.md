@@ -185,3 +185,34 @@ Short ADR-style notes for the choices that shape the MVP. Each entry states cont
 - Phase 4 removals (deleting legacy modules/data) are explicitly deferred until a pilot confirms no one relies on them.
 
 **Status:** Implemented in the current codebase; pilot pending.
+
+
+---
+
+## ADR-016 — Trust-preserving interaction model
+
+**Context:** The simplified structure was in place, but a polish audit found trust and completeness defects: stale data during slow identity/participant switches, background refreshes overwriting dirty forms or expected versions, progress and status saved as separate requests, receipts losing task identity, missing no-task capture paths, inaccessible overlays, and prototype-language surfaces.
+
+**Decision:**
+
+1. **Key data by identity and record.** Route content remounts on identity change. The meeting derives an active workspace only when `session_id` and participant match the selection; old actionable tasks are never rendered under a new name.
+2. **Freeze the base version** when an edit/capture draft opens. Background refresh may update read-only context but cannot move the version the user is editing; conflicts require **Load latest state** and a deliberate re-save.
+3. **Atomic writes.** Progress plus optional status is one transaction with one expected version. A conflict rolls back both. Distinct create/update commands accept unique `client_operation_id` values for response-loss retries.
+4. **Explain saves with records.** Receipts carry kind, id, task context, text and timestamp. Daily notes remain separate from task updates; task updates are append-only and offer **View update** / **Add correction**, never an edit that implies history replacement.
+5. **Guard drafts consistently.** Task/capture/create dialogs use the same in-app discard confirmation for Close, Cancel, Escape, backdrop, participant changes, meeting exit and SPA Back. Saves in flight block dismissal. Pristine forms close immediately.
+6. **Complete the missing paths.** Person-level and zero-task help/follow-up/capture actions, manager reassignment in task detail, taskless blocker resolution in outcomes, captured-note display, current daily-update reporting, and full attention pagination.
+7. **Read-first task detail.** Opening a task shows state, latest update, help and follow-ups first; metadata editing is a separate mode. New tasks are a short form with optional details and authorized inline project creation.
+8. **URL-backed Work.** Active/Completed/All scope, search, filters, pagination and the selected task live in the URL; filter chips are removable and empty states distinguish search, filters, no active work and no work.
+9. **One accessible overlay.** Portal rendering, labelled dialogs, focus trap, inert background, scroll lock, topmost-only Escape, focus restoration and mobile full-height surfaces are shared by modals, drawers and confirmations.
+10. **One day boundary.** The server UTC date is the team business date (`/meta`, `/today`); the UI uses it for due/overdue and daily updates. Closed historical tasks show dates, not “overdue”.
+11. **Production presentation.** Compact header navigation replaces the sidebar. Pilot tools, legacy board and development identity switching are absent from normal production builds unless explicitly configured (`VITE_ENABLE_PILOT` / `AUTH_MODE=dev`).
+
+**Consequences:**
+
+- More service/schema surface (retry ids, business date) but fewer ambiguous client behaviours.
+- `Task.version`, `client_operation_id` and atomic updates are now part of the correctness contract.
+- Draft privacy and focus behaviour are centralized; new dialogs must use the shared primitives.
+- The app still has no automated frontend test runner; the critical journeys are exercised with Playwright against the running app and must be repeated for the pilot.
+- Screen-reader and 200% zoom validation remain manual pilot tasks, as does real-user testing.
+
+**Status:** Implemented in the current codebase; frontend automation and formal accessibility audit are follow-ups, not claims of completion.

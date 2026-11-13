@@ -140,7 +140,7 @@ export default function ProjectsPage() {
                       </span>
                     )}
                   </div>
-                  <Link to={`/board?project=${project.id}`} className="btn btn-secondary btn-sm">
+                  <Link to={`/work?project=${project.id}`} className="btn btn-secondary btn-sm">
                     View tasks <Icon name="arrowRight" className="h-3 w-3" />
                   </Link>
                 </div>

@@ -15,6 +15,7 @@ The previous iteration exposed seven equally prominent destinations and a perman
 | Before | Now |
 |---|---|
 | Seven manager destinations | **Today** and **Work**, plus a collapsed Pilot tools section |
+| Persistent 208px sidebar | Compact app header with two destinations and an account control |
 | Overview-style Today with pulse tiles, history, carry-forward, and a duplicate task list | One attention queue, a short current-work preview, and one optional update composer |
 | Employee questionnaire (progress + next steps + blockers + per-task updates) | One optional “Anything changed?” update, or a task-specific update, plus a distinct “Needs help” action |
 | Three permanent meeting panels | One main workspace with a compact person selector, on-demand roster, and a contextual capture drawer |
@@ -35,7 +36,7 @@ The plan itself is in [docs/simplification-plan.md](docs/simplification-plan.md)
 
 **Managers** see one state-aware action (Start / Resume / View outcomes), a single deduplicated team attention queue, and a Past standups link. There is no manager “My work”, no pulse tiles and no recent-history panel.
 
-**Employees** see their attention queue, a short current-work preview, and one optional composer:
+**Employees** see their attention queue (first 10 with a full-set View all), a current-work preview with attention tasks removed, and one optional composer:
 
 - “Anything changed?” is one text field; a task link and next steps are optional.
 - Updating a task from its row records one update and an optional status change in place.
@@ -49,24 +50,34 @@ Attention ordering is computed by the server and shared with the meeting workspa
 
 ### Work
 
-A searchable task list instead of a Kanban default:
+A searchable, URL-backed task list instead of a Kanban default:
 
-- Task title, owner where useful, status, and relevant due/attention text.
-- One search box and one Filters control.
-- Common statuses through the filter; backlog/canceled remain stored and accessible.
-- Inline status change and a shared task detail dialog for updates, blockers, follow-ups and history.
+- Active / Completed / All scope, one search box, and one Filters control.
+- Active filters appear as removable chips, not only a badge.
+- Search, filters, pagination and the open task are in the URL, so Back and reload restore the view.
+- Task detail opens read-first (status, owner, due, latest update, help, follow-ups) with **Add update** and a separate **Edit details** mode.
+- Managers can reassign or move tasks from the shared detail dialog; employees remain constrained by existing permissions.
+- Inline status change, differentiated empty states, and pagination clamp after the last row.
 - Task creation requires an explicit project selection when more than one project exists.
 - Project settings are reachable contextually from the filter panel by managers/project owners.
 - Pagination covers the full result set.
 
 ![Work list](docs/screenshots/work-list.png)
 
+![Read-first task detail](docs/screenshots/task-detail.png)
+
 ### Focused standup
 
 ![Focused standup](docs/screenshots/live-meeting.png)
 
+Mobile: [Today](docs/screenshots/today-mobile.png) · [focused meeting](docs/screenshots/meeting-mobile.png).
+
 - The global navigation is removed in meeting mode.
 - A compact person selector (previous/next, roster on demand) replaces the permanent participant column.
+- Person-level Add follow-up / Ask for help / Decision / General note work even when the person has no tasks.
+- “Mark reviewed & next” is the progression action; accidental reviews can be undone from the roster.
+- Switching people with a draft prompts before discarding; the last saved capture has a **View entry** link.
+- Focus is trapped in overlays, the background is inert, and Escape affects only the topmost dialog.
 - The permanent capture column is gone; Update, Needs help and Add follow-up open a contextual drawer, with Decision and General note under More.
 - One text field initially; owner/due date appear for follow-ups, and task context is shown and editable.
 - “Reviewed & next” is the main navigation action; viewing someone never marks them reviewed.
@@ -91,7 +102,17 @@ Carry-forward is unchanged underneath: open blockers and action items survive se
 
 ---
 
-## 3. What is implemented
+## 3. Trust and reliability
+
+The polish pass focused on making the same small product behave predictably:
+
+- Participant data is keyed by session + person; a slow switch shows a loading state and never leaves the previous person's tasks actionable under the new name.
+- Task detail and capture combine progress with an optional status change in one backend transaction. A version conflict rolls back the whole operation.
+- Client operation ids make task, blocker, follow-up, decision and note creation retry-safe; daily updates are upserts.
+- Conflict recovery keeps the user's text and offers **Load latest state** before a deliberate re-save.
+- Task/editor drafts are protected on Close, Cancel, Escape, backdrop click, participant change and Browser Back; pristine forms close immediately.
+- Every page refetches on identity change; a dev identity switch cannot display the previous user's data.
+- Date labels use the server business date and complete wording (“Due in 4 days”, “2 days overdue”) instead of relative shorthand.
 
 ### Today / daily updates
 
@@ -120,6 +141,7 @@ Carry-forward is unchanged underneath: open blockers and action items survive se
 
 ### Pilot tools
 
+- Pilot tools are rendered only in local development or when `VITE_ENABLE_PILOT=true`; the normal production build contains no pilot navigation.
 - **Work intake** — retained behind Pilot tools; review/convert flow and permissions unchanged.
 - **Transcript review** — retained for managers behind Pilot tools and from a session’s “Import transcript” action. Proposals now show readable before/after text instead of JSON, and keep evidence, confidence, duplicate/ambiguity warnings, approval and stale-version protection.
 - **Legacy board** — available at `/legacy/board` during the pilot; `/board` redirects to Work.
@@ -173,7 +195,7 @@ make web      # terminal 2 → http://localhost:5173
 | `dana@nex.local` | Employee | Taxonomy blocker |
 | `admin@nex.local` | Admin | User/role administration |
 
-Switch identities from the bottom of the compact sidebar.
+Switch identities from the account control in the header (local development only).
 
 ### Five-minute demo
 
@@ -241,10 +263,13 @@ Hiding a control is never used as authorization; the service layer enforces thes
 ## 7. Testing
 
 ```bash
-make backend-test    # 48 pytest tests
+make backend-test    # 53 pytest tests
 make backend-lint    # ruff
 make frontend-check  # tsc + production build
+npm --prefix frontend run test:e2e   # Playwright smoke (requires running app + seed)
 ```
+
+The browser smoke test covers slow participant switching, dirty-dismiss guards, atomic progress/status conflict recovery, no-task capture, review undo, outcomes, URL-backed Work, legacy project redirects and focus containment. Set `CHROME_PATH` if Playwright's Chromium is not installed; CI installs it with `npx playwright install --with-deps chromium`.
 
 Backend coverage includes:
 
@@ -258,7 +283,7 @@ Backend coverage includes:
 - intake review/conversion;
 - AI no-auto-mutation, approve/apply/edit/reject, duplicates, ambiguous matches, stale-version conflicts and the SQS worker path.
 
-The new flows were also exercised end-to-end in Chromium (manager Today → focused meeting → capture drawer → reviewed & next → outcomes → employee Today → Work → redirects → readable AI review) with zero console/page errors.
+The committed browser smoke runs the critical flows end-to-end in Chromium (manager Today → focused meeting → capture drawer → conflict recovery → review/finish → outcomes → employee Today → no-task help → Work → legacy redirects → focus containment) with zero unexpected console/page errors.
 
 Pilot validation: [docs/pilot-checklist.md](docs/pilot-checklist.md).
 
@@ -277,7 +302,8 @@ backend/
     seed.py       demo analytics team and historical standups
     worker.py     SQS transcript worker
   migrations/     Alembic, initial schema + daily updates
-  tests/          48 pytest tests
+  tests/          53 pytest tests
+frontend/e2e/     Playwright polish smoke journey
 frontend/
   src/
     pages/        Today, Work, Session, Standups, Projects, Intake, AI, legacy Board
@@ -321,7 +347,9 @@ VPC networking must provide egress or endpoints for S3, SQS and Bedrock. See [op
 - **No automatic session creation.** A manager starts today’s session from Today.
 - **No notifications/email.**
 - **No separate comment thread or attachments.** Task updates and session notes cover free text; transcripts are the only binary upload.
-- **Capture retries.** Daily updates are idempotent upserts; append-only capture actions rely on UI submit guards. Full idempotency keys for every capture are a follow-up.
+- **Frontend regression tests.** A Playwright smoke script covers the critical journeys (`frontend/e2e/polish-smoke.mjs`), but there is no component-level frontend test suite yet.
+- **Accessibility validation.** Focus trapping, labels, live regions and keyboard operation were checked in browser flows; a formal screen-reader audit and 200% zoom sweep remain manual pilot work.
+- **Pilot status.** The validation in [docs/pilot-checklist.md](docs/pilot-checklist.md) has not been run with real users yet.
 - **Legacy/pilot surface.** Board, intake, transcript review and project settings remain available during the pilot; they are not part of the default navigation.
 - **Secrets.** The Terraform example passes the DB password as a variable for clarity; production should use Secrets Manager and consider RDS Proxy.
 - **AI quality.** The mock extractor is deterministic; the Bedrock prompt needs validation against authorized real transcripts. Human approval is mandatory.
@@ -337,3 +365,4 @@ VPC networking must provide egress or endpoints for S3, SQS and Bedrock. See [op
 - [docs/operations.md](docs/operations.md) — environment, migrations, deployment, monitoring, security.
 - [docs/decisions.md](docs/decisions.md) — ADRs, including ADR-015 (simplification).
 - [docs/pilot-checklist.md](docs/pilot-checklist.md) — validation scenarios, targets and exit criteria.
+- [docs/product-polish-handoff.md](docs/product-polish-handoff.md) — the trust/interaction polish brief implemented in this pass.

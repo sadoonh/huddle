@@ -33,15 +33,28 @@ class TodaySession(ORMModel):
     participant_count: int = 0
 
 
+class AttentionIssue(ORMModel):
+    kind: str  # blocker | action_item | reason
+    id: str
+    label: str
+    detail: str | None = None
+    owner: UserBrief | None = None
+    due_date: date | None = None
+    age_days: int = 0
+
+
 class AttentionItem(ORMModel):
     kind: str  # task | blocker | action_item
     id: str
     task_id: str | None = None
+    focus_id: str | None = None
     title: str
     detail: str | None = None
     owner: UserBrief | None = None
+    reporter: UserBrief | None = None
     reason: str
     reasons: list[str] = Field(default_factory=list)
+    issues: list[AttentionIssue] = Field(default_factory=list)
     due_date: date | None = None
     age_days: int = 0
     task_status: TaskStatus | None = None
@@ -51,6 +64,7 @@ class AttentionItem(ORMModel):
 
 
 class TodayOut(ORMModel):
+    business_date: date
     session: TodaySession | None
     daily_update: DailyUpdateOut | None
     attention: Page[AttentionItem]

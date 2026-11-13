@@ -47,6 +47,7 @@ def build_today(
     current_work = build_current_work(db, user, limit=work_limit)
 
     return TodayOut(
+        business_date=date.today(),
         session=session_summary,
         daily_update=get_daily_update(db, user),
         attention=Page(

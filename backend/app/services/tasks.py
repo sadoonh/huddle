@@ -134,6 +134,21 @@ def get_task(db: Session, user: User, task_id: str) -> Task:
 
 
 def create_task(db: Session, user: User, payload: TaskCreate) -> Task:
+    if payload.client_operation_id:
+        existing = db.scalar(
+            select(Task).where(Task.client_operation_id == payload.client_operation_id)
+        )
+        if existing is not None:
+            if (
+                existing.created_by_id != user.id
+                or existing.project_id != payload.project_id
+                or existing.title != payload.title.strip()
+            ):
+                raise ConflictError(
+                    "This operation id was already used for a different task."
+                )
+            return existing
+
     project = get_project_or_404(db, payload.project_id)
     ensure_project_visible(user, project)
     if payload.assignee_id:
@@ -152,6 +167,7 @@ def create_task(db: Session, user: User, payload: TaskCreate) -> Task:
         is_at_risk=payload.is_at_risk,
         at_risk_reason=payload.at_risk_reason,
         created_by_id=user.id,
+        client_operation_id=payload.client_operation_id,
     )
     db.add(task)
     db.flush()
@@ -274,6 +290,20 @@ def add_task_update(
     if attributed_to and attributed_to != user.id and not is_manager(user):
         raise ForbiddenError("Only managers can record an update on behalf of someone")
 
+    client_operation_id = getattr(payload, "client_operation_id", None)
+    if client_operation_id:
+        existing = db.scalar(
+            select(TaskUpdate).where(
+                TaskUpdate.client_operation_id == client_operation_id
+            )
+        )
+        if existing is not None:
+            if existing.task_id != task.id or existing.author_id != user.id:
+                raise ConflictError(
+                    "This operation id was already used for a different submission."
+                )
+            return existing
+
     update = TaskUpdate(
         task_id=task.id,
         author_id=user.id,
@@ -282,9 +312,25 @@ def add_task_update(
         source=source,
         progress=payload.progress.strip(),
         next_steps=payload.next_steps.strip() if payload.next_steps else None,
+        client_operation_id=client_operation_id,
     )
     db.add(update)
     db.flush()
+
+    status = getattr(payload, "status", None)
+    expected_version = getattr(payload, "expected_version", None)
+    if status is not None:
+        status = TaskStatus(status)
+        if status != task.status:
+            # Same transaction: a version conflict rolls back the update too.
+            patch_task(
+                db,
+                user,
+                task.id,
+                TaskPatch(status=status, expected_version=expected_version),
+                session_id=session_id,
+                audit_source=audit_source,
+            )
     record_event(
         db,
         event_type="task.update_added",
@@ -298,6 +344,7 @@ def add_task_update(
             "progress": update.progress,
             "next_steps": update.next_steps,
             "attributed_to_user_id": update.attributed_to_user_id,
+            "client_operation_id": update.client_operation_id,
         },
     )
     return update
@@ -317,6 +364,23 @@ def create_blocker(
     session_id: str | None = None,
     audit_source: AuditSource = AuditSource.TASK_INTERFACE,
 ) -> Blocker:
+    if payload.client_operation_id:
+        existing = db.scalar(
+            select(Blocker).where(
+                Blocker.client_operation_id == payload.client_operation_id
+            )
+        )
+        if existing is not None:
+            if (
+                existing.reported_by_id != user.id
+                or existing.task_id != payload.task_id
+                or existing.description != payload.description.strip()
+            ):
+                raise ConflictError(
+                    "This operation id was already used for a different help request."
+                )
+            return existing
+
     task: Task | None = None
     if payload.task_id:
         task = get_task_or_404(db, payload.task_id)
@@ -335,6 +399,7 @@ def create_blocker(
         reported_by_id=user.id,
         reported_session_id=session_id,
         status=BlockerStatus.OPEN,
+        client_operation_id=payload.client_operation_id,
     )
     db.add(blocker)
     db.flush()
@@ -410,6 +475,22 @@ def create_action_item(
 ) -> ActionItem:
     if not is_manager(user):
         raise ForbiddenError("Only managers can create action items")
+    if payload.client_operation_id:
+        existing = db.scalar(
+            select(ActionItem).where(
+                ActionItem.client_operation_id == payload.client_operation_id
+            )
+        )
+        if existing is not None:
+            if (
+                existing.created_by_id != (created_by or user).id
+                or existing.task_id != payload.task_id
+                or existing.description != payload.description.strip()
+            ):
+                raise ConflictError(
+                    "This operation id was already used for a different follow-up."
+                )
+            return existing
     if payload.owner_id:
         get_user_or_404(db, payload.owner_id)
     if payload.task_id:
@@ -424,6 +505,7 @@ def create_action_item(
         due_date=payload.due_date,
         status=ActionItemStatus.OPEN,
         created_by_id=(created_by or user).id,
+        client_operation_id=payload.client_operation_id,
     )
     db.add(item)
     db.flush()
@@ -519,6 +601,21 @@ def create_decision(
 ) -> Decision:
     if not is_manager(user):
         raise ForbiddenError("Only managers can record decisions")
+    if payload.client_operation_id:
+        existing = db.scalar(
+            select(Decision).where(
+                Decision.client_operation_id == payload.client_operation_id
+            )
+        )
+        if existing is not None:
+            if (
+                existing.decided_by_id != (decided_by or user).id
+                or existing.description != payload.description.strip()
+            ):
+                raise ConflictError(
+                    "This operation id was already used for a different decision."
+                )
+            return existing
     if payload.task_id:
         task = get_task_or_404(db, payload.task_id)
         ensure_task_visible(user, task)
@@ -535,6 +632,7 @@ def create_decision(
         rationale=payload.rationale.strip() if payload.rationale else None,
         decided_by_id=(decided_by or user).id,
         responsible_user_id=payload.responsible_user_id,
+        client_operation_id=payload.client_operation_id,
     )
     db.add(decision)
     db.flush()

@@ -49,12 +49,25 @@ def today(db: DB, user: CurrentUser):
 
 
 @router.get("/sessions", response_model=Page[SessionOut])
-def sessions(db: DB, user: CurrentUser, pagination: Pagination, status: str | None = None):
+def sessions(
+    db: DB,
+    user: CurrentUser,
+    pagination: Pagination,
+    status: str | None = None,
+    start: date | None = None,
+    end: date | None = None,
+):
     from app.enums import SessionStatus
 
     parsed = SessionStatus(status) if status else None
     items, total = standup_service.list_sessions(
-        db, user, status=parsed, limit=pagination.limit, offset=pagination.offset
+        db,
+        user,
+        status=parsed,
+        start=start,
+        end=end,
+        limit=pagination.limit,
+        offset=pagination.offset,
     )
     return Page[SessionOut](
         items=items, total=total, limit=pagination.limit, offset=pagination.offset
@@ -178,7 +191,9 @@ def capture_decision(
 
 @router.post("/sessions/{session_id}/notes", response_model=SessionNoteOut, status_code=201)
 def capture_note(db: DB, user: CurrentUser, session_id: str, payload: SessionNoteCreate):
-    return standup_service.capture_note(db, user, session_id, payload.body)
+    return standup_service.capture_note(
+        db, user, session_id, payload.body, payload.client_operation_id
+    )
 
 
 @router.get("/sessions/{session_id}/notes", response_model=list[SessionNoteOut])

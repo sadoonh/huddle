@@ -7,11 +7,18 @@
 ```
 
 `start.sh` is idempotent: it reuses the venv, `node_modules` and existing data,
-verifies both services are healthy, and cleans up both child processes on
-Ctrl+C. If the app is already running, it reports the URL and exits rather than
-failing on a port conflict. Use `make stop` (or `STOP=1 ./start.sh`) to stop it.
-Use `NO_OPEN=1`, `RESET=1`, `API_PORT=…` or `WEB_PORT=…` as needed.
-Logs: `.dev/api.log`, `.dev/web.log`; PID files: `.dev/api.pid`, `.dev/web.pid`.
+checks/updates the local schema, verifies both services are healthy, and cleans
+up both child processes on Ctrl+C. If the app is already running, it reports
+the URL and exits rather than failing on a port conflict. Use `make stop`
+(or `STOP=1 ./start.sh`) to stop it. Use `NO_OPEN=1`, `RESET=1`, `API_PORT=…`
+or `WEB_PORT=…` as needed. Logs: `.dev/api.log`, `.dev/web.log`; PID files:
+`.dev/api.pid`, `.dev/web.pid`.
+
+For SQLite, `app.dev_schema` creates missing tables, adds missing nullable
+columns/indexes and stamps the database at the current Alembic head without
+dropping data. For PostgreSQL, `start.sh` runs `alembic upgrade head` instead.
+If a required column cannot be added safely to an existing local database, the
+launcher asks for `RESET=1 ./start.sh`.
 
 Manual equivalent:
 
@@ -30,9 +37,15 @@ Useful commands:
 make backend-test
 make backend-lint
 make frontend-check
+npm --prefix frontend run test:e2e   # app must be seeded and running
 make db-upgrade
 make db-revision m="add table x"
 ```
+
+For the browser smoke, install Chromium once with
+`cd frontend && npx playwright install --with-deps chromium`, or set
+`CHROME_PATH` to an existing binary. The script mutates demo data and requires a
+fresh seed.
 
 ### Docker
 
@@ -67,7 +80,12 @@ Backend settings are environment variables (see `backend/.env.example`).
 | `UPCOMING_DUE_DAYS` | 3 | “active” due-date window |
 | `AUTO_INIT_DB` | false | production must use Alembic |
 
-Frontend: `VITE_API_BASE` (default `/api/v1`).
+Frontend: `VITE_API_BASE` (default `/api/v1`) and `VITE_ENABLE_PILOT`
+(default false; true in local dev). Pilot tools are hidden from normal
+production builds.
+
+`GET /meta` exposes the server business date (UTC team day) used for due and
+overdue labels.
 
 ---
 
@@ -275,3 +293,5 @@ The SPA shows the current version. Refresh and re-apply. This is intentional pro
 - [ ] Backups, restore drill and retention confirmed.
 - [ ] Admin role assignment process documented.
 - [ ] Audit access reviewed (managers see the full trail).
+- [ ] `VITE_ENABLE_PILOT` is false (or the pilot is explicitly approved).
+- [ ] AUTH_MODE=nex and dev identity controls are unavailable.

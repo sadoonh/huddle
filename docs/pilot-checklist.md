@@ -40,6 +40,11 @@ Do not collect transcript or note contents for this experiment. Aggregate timing
 | 13 | No-change day | Employee submits nothing; absence is not treated as confirmation |
 | 14 | Taskless blocker appears in a later standup | Still visible until resolved; origin/age preserved |
 | 15 | Work list search/filter/pagination | Full result set is reachable; no Kanban columns in default Work |
+| 16 | Dev identity switch | The previous identity's tasks/attention never appear under the new identity |
+| 17 | Retry a create after a lost response | One record, not a duplicate |
+| 18 | Browser Back with an unsaved meeting draft | In-app discard confirmation; cancel keeps the meeting and text |
+| 19 | Open a task | State and latest update appear before edit fields; Add update works in place |
+| 20 | Work reload/Back with filters and a task open | Search, filters, page and task context are restored |
 
 Also test:
 

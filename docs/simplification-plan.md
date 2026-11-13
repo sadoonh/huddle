@@ -1,6 +1,6 @@
 # Product simplification plan
 
-> **Implementation status:** Phases 1–3 are implemented in the current codebase (Today + Work navigation, focused meeting, daily updates, durable help, outcome-first history, pilot-gated tools). Phase 4 destructive removals are deliberately deferred pending the pilot in [pilot-checklist.md](pilot-checklist.md). See ADR-015 for the decision record.
+> **Implementation status:** Phases 1–3 are implemented in the current codebase (Today + Work navigation, focused meeting, daily updates, durable help, outcome-first history, pilot-gated tools). Phase 4 destructive removals are deliberately deferred pending the pilot in [pilot-checklist.md](pilot-checklist.md). ADR-015 records the simplification; ADR-016 records the follow-up trust/interaction polish (atomic saves, retry ids, draft guards, accessible overlays, URL-backed Work, business date).
 
 ## Recommendation
 

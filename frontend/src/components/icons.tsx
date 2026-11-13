@@ -63,6 +63,7 @@ const paths = {
       <path d="m20 20-3.5-3.5" />
     </>
   ),
+  filter: <path d="M3 5h18l-7 8v6l-4 2v-8Z" />,
   play: <path d="M7 4v16l13-8Z" />,
   users: (
     <>

@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api import ai, audit, daily_updates, intake, projects, standups, tasks, today, users
+from app.api import ai, audit, daily_updates, intake, meta, projects, standups, tasks, today, users
 
 api_router = APIRouter()
 api_router.include_router(users.router)
@@ -12,3 +12,4 @@ api_router.include_router(audit.router)
 api_router.include_router(ai.router)
 api_router.include_router(today.router)
 api_router.include_router(daily_updates.router)
+api_router.include_router(meta.router)

@@ -185,6 +185,9 @@ class Task(UUIDMixin, TimestampMixin, Base):
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    client_operation_id: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True
+    )
 
     project: Mapped[Project] = relationship(back_populates="tasks")
     assignee: Mapped[User | None] = relationship(foreign_keys=[assignee_id])
@@ -219,6 +222,11 @@ class TaskUpdate(UUIDMixin, Base):
     )
     progress: Mapped[str] = mapped_column(Text, nullable=False)
     next_steps: Mapped[str | None] = mapped_column(Text)
+    # Client-generated logical submission id. A retry with the same id returns
+    # the original row instead of creating a duplicate update.
+    client_operation_id: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
     task: Mapped[Task] = relationship(back_populates="updates")
@@ -261,6 +269,9 @@ class Blocker(UUIDMixin, TimestampMixin, Base):
         ForeignKey("standup_sessions.id", ondelete="SET NULL")
     )
     resolution_details: Mapped[str | None] = mapped_column(Text)
+    client_operation_id: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True
+    )
 
     task: Mapped[Task | None] = relationship(back_populates="blockers")
     project: Mapped[Project | None] = relationship()
@@ -347,6 +358,9 @@ class Decision(UUIDMixin, Base):
     responsible_user_id: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")
     )
+    client_operation_id: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
     session: Mapped[StandupSession | None] = relationship()
@@ -380,6 +394,9 @@ class ActionItem(UUIDMixin, TimestampMixin, Base):
     )
     created_by_id: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")
+    )
+    client_operation_id: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True
     )
 
     session: Mapped[StandupSession | None] = relationship()
@@ -421,6 +438,9 @@ class SessionNote(UUIDMixin, Base):
         ForeignKey("users.id", ondelete="SET NULL")
     )
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    client_operation_id: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
     session: Mapped[StandupSession] = relationship()

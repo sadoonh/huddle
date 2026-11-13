@@ -51,6 +51,7 @@ export interface Project {
 export interface TaskUpdate {
   id: string
   task_id: string
+  task_title: string | null
   progress: string
   next_steps: string | null
   source: UpdateSource
@@ -161,15 +162,28 @@ export interface TodaySession {
 
 export type AttentionReason = 'blocker' | 'overdue' | 'at_risk' | 'follow_up'
 
+export interface AttentionIssue {
+  kind: 'blocker' | 'action_item' | 'reason'
+  id: string
+  label: string
+  detail: string | null
+  owner: UserBrief | null
+  due_date: string | null
+  age_days: number
+}
+
 export interface AttentionItem {
   kind: 'task' | 'blocker' | 'action_item'
   id: string
   task_id: string | null
+  focus_id: string | null
   title: string
   detail: string | null
   owner: UserBrief | null
+  reporter: UserBrief | null
   reason: string
   reasons: string[]
+  issues: AttentionIssue[]
   due_date: string | null
   age_days: number
   task_status: TaskStatus | null
@@ -179,6 +193,7 @@ export interface AttentionItem {
 }
 
 export interface TodayData {
+  business_date: string
   session: TodaySession | null
   daily_update: DailyUpdate | null
   attention: Page<AttentionItem>
@@ -197,6 +212,7 @@ export interface SessionOutcomes {
 export interface Participant {
   id: string
   user: UserBrief
+  daily_update: DailyUpdate | null
   pre_meeting_progress: string | null
   pre_meeting_next_steps: string | null
   pre_meeting_blockers: string | null

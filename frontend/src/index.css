@@ -31,7 +31,7 @@
 
 @layer components {
   .btn {
-    @apply inline-flex select-none items-center justify-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex min-h-[40px] select-none items-center justify-center gap-1.5 rounded-lg border px-3.5 py-2 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
     @apply border-emerald-700 bg-emerald-700 text-white hover:bg-emerald-800;
@@ -46,7 +46,7 @@
     @apply border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100;
   }
   .btn-sm {
-    @apply px-2 py-1 text-xs;
+    @apply min-h-[34px] px-2.5 py-1.5 text-xs;
   }
   .input,
   .textarea,
@@ -57,7 +57,7 @@
     @apply min-h-[76px] resize-y leading-relaxed;
   }
   .label {
-    @apply mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500;
+    @apply mb-1 block text-sm font-medium text-slate-600;
   }
   .card {
     @apply rounded-xl border border-slate-200 bg-white shadow-panel;
@@ -109,5 +109,32 @@
   }
   .nav-item-active {
     @apply bg-white/10 text-white;
+  }
+}
+
+
+a:focus-visible,
+button:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid rgb(16 185 129 / 0.75);
+  outline-offset: 2px;
+}
+
+summary {
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

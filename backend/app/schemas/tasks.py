@@ -25,6 +25,7 @@ from app.schemas.common import ORMModel, UserBrief
 class TaskCreate(ORMModel):
     project_id: str
     title: str = Field(min_length=1, max_length=300)
+    client_operation_id: str | None = Field(default=None, max_length=64)
     description: str | None = None
     assignee_id: str | None = None
     priority: Priority = Priority.MEDIUM
@@ -57,11 +58,16 @@ class TaskUpdateCreate(ORMModel):
     progress: str = Field(min_length=1)
     next_steps: str | None = None
     attributed_to_user_id: str | None = None
+    # Optional atomic status change in the same transaction.
+    status: TaskStatus | None = None
+    expected_version: int | None = None
+    client_operation_id: str | None = Field(default=None, max_length=64)
 
 
 class TaskUpdateOut(ORMModel):
     id: str
     task_id: str
+    task_title: str | None = None
     progress: str
     next_steps: str | None
     source: UpdateSource
@@ -76,6 +82,7 @@ class BlockerCreate(ORMModel):
     task_id: str | None = None
     project_id: str | None = None
     owner_id: str | None = None
+    client_operation_id: str | None = Field(default=None, max_length=64)
 
 
 class BlockerResolve(ORMModel):
@@ -105,6 +112,7 @@ class ActionItemCreate(ORMModel):
     owner_id: str | None = None
     task_id: str | None = None
     due_date: date | None = None
+    client_operation_id: str | None = Field(default=None, max_length=64)
 
 
 class ActionItemPatch(ORMModel):
@@ -134,6 +142,7 @@ class DecisionCreate(ORMModel):
     project_id: str | None = None
     rationale: str | None = None
     responsible_user_id: str | None = None
+    client_operation_id: str | None = Field(default=None, max_length=64)
 
 
 class DecisionOut(ORMModel):

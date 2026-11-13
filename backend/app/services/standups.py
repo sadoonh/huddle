@@ -176,12 +176,18 @@ def list_sessions(
     user: User,
     *,
     status: SessionStatus | None = None,
+    start: date | None = None,
+    end: date | None = None,
     limit: int = 30,
     offset: int = 0,
 ) -> tuple[list, int]:
     stmt = select(StandupSession)
     if status:
         stmt = stmt.where(StandupSession.status == status)
+    if start:
+        stmt = stmt.where(StandupSession.session_date >= start)
+    if end:
+        stmt = stmt.where(StandupSession.session_date <= end)
     if not is_manager(user):
         stmt = stmt.join(StandupParticipant).where(StandupParticipant.user_id == user.id)
     total = db.scalar(select(func.count()).select_from(stmt.order_by(None).subquery())) or 0
@@ -215,14 +221,15 @@ def session_detail(db: Session, user: User, session_id: str) -> SessionDetail:
     blocker_counts, action_counts = _per_participant_open_counts(
         db, [p.user_id for p in participants]
     )
-    daily_user_ids = set(
-        db.scalars(
-            select(DailyUpdate.user_id).where(
+    daily_updates = {
+        row.user_id: row
+        for row in db.scalars(
+            select(DailyUpdate).where(
                 DailyUpdate.user_id.in_([p.user_id for p in participants]),
                 DailyUpdate.update_date == session.session_date,
             )
         ).all()
-    )
+    }
     return SessionDetail(
         **base.model_dump(),
         participants=[
@@ -230,7 +237,8 @@ def session_detail(db: Session, user: User, session_id: str) -> SessionDetail:
                 p,
                 open_blocker_count=blocker_counts.get(p.user_id, 0),
                 open_action_item_count=action_counts.get(p.user_id, 0),
-                has_daily_update=p.user_id in daily_user_ids,
+                has_daily_update=p.user_id in daily_updates,
+                daily_update=daily_updates.get(p.user_id),
             )
             for p in participants
         ],
@@ -641,6 +649,7 @@ def build_workspace(
             open_blocker_count=len(open_blockers),
             open_action_item_count=len(open_actions),
             has_daily_update=daily is not None,
+            daily_update=daily,
         ),
         daily_update=DailyUpdateOut.model_validate(daily) if daily else None,
         needs_attention=needs_attention,
@@ -717,6 +726,9 @@ def capture_progress(
             progress=payload.progress,
             next_steps=payload.next_steps,
             attributed_to_user_id=payload.attributed_to_user_id or task.assignee_id,
+            status=payload.status,
+            expected_version=payload.expected_version,
+            client_operation_id=payload.client_operation_id,
         ),
         session_id=session.id,
         source=UpdateSource.STANDUP,
@@ -737,6 +749,7 @@ def capture_blocker(db: Session, user: User, session_id: str, payload: MeetingBl
             description=payload.description,
             task_id=payload.task_id,
             owner_id=payload.owner_id,
+            client_operation_id=payload.client_operation_id,
         ),
         session_id=session.id,
         audit_source=AuditSource.MANAGER_ACTION,
@@ -759,6 +772,7 @@ def capture_action_item(
             owner_id=payload.owner_id,
             task_id=payload.task_id,
             due_date=payload.due_date,
+            client_operation_id=payload.client_operation_id,
         ),
         session_id=session.id,
         audit_source=AuditSource.MANAGER_ACTION,
@@ -780,6 +794,7 @@ def capture_decision(db: Session, user: User, session_id: str, payload: MeetingD
             project_id=payload.project_id,
             rationale=payload.rationale,
             responsible_user_id=payload.responsible_user_id,
+            client_operation_id=payload.client_operation_id,
         ),
         session_id=session.id,
         audit_source=AuditSource.MANAGER_ACTION,
@@ -787,10 +802,33 @@ def capture_decision(db: Session, user: User, session_id: str, payload: MeetingD
     return decision_out(decision)
 
 
-def capture_note(db: Session, user: User, session_id: str, body: str) -> SessionNoteOut:
+def capture_note(
+    db: Session,
+    user: User,
+    session_id: str,
+    body: str,
+    client_operation_id: str | None = None,
+) -> SessionNoteOut:
     require_manager(user)
     session = get_session_or_404(db, session_id)
-    note = SessionNote(session_id=session.id, author_id=user.id, body=body.strip())
+    if client_operation_id:
+        existing = db.scalar(
+            select(SessionNote).where(
+                SessionNote.client_operation_id == client_operation_id
+            )
+        )
+        if existing is not None:
+            if existing.author_id != user.id or existing.session_id != session.id:
+                raise ConflictError(
+                    "This operation id was already used for a different note."
+                )
+            return SessionNoteOut.model_validate(existing)
+    note = SessionNote(
+        session_id=session.id,
+        author_id=user.id,
+        body=body.strip(),
+        client_operation_id=client_operation_id,
+    )
     db.add(note)
     db.flush()
     record_event(

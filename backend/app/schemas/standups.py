@@ -4,7 +4,7 @@ from datetime import date, datetime
 
 from pydantic import Field
 
-from app.enums import SessionStatus
+from app.enums import SessionStatus, TaskStatus
 from app.schemas.common import ORMModel, UserBrief
 from app.schemas.tasks import (
     ActionItemOut,
@@ -45,6 +45,7 @@ class SessionOut(ORMModel):
 class ParticipantOut(ORMModel):
     id: str
     user: UserBrief
+    daily_update: DailyUpdateOut | None = None
     pre_meeting_progress: str | None
     pre_meeting_next_steps: str | None
     pre_meeting_blockers: str | None
@@ -133,6 +134,9 @@ class ProgressCapture(ORMModel):
     progress: str = Field(min_length=1)
     next_steps: str | None = None
     attributed_to_user_id: str | None = None
+    status: TaskStatus | None = None
+    expected_version: int | None = None
+    client_operation_id: str | None = Field(default=None, max_length=64)
 
 
 class MeetingBlockerCreate(ORMModel):
@@ -140,6 +144,7 @@ class MeetingBlockerCreate(ORMModel):
     task_id: str | None = None
     owner_id: str | None = None
     attributed_to_user_id: str | None = None
+    client_operation_id: str | None = Field(default=None, max_length=64)
 
 
 class MeetingActionItemCreate(ORMModel):
@@ -147,6 +152,7 @@ class MeetingActionItemCreate(ORMModel):
     owner_id: str | None = None
     task_id: str | None = None
     due_date: date | None = None
+    client_operation_id: str | None = Field(default=None, max_length=64)
 
 
 class MeetingDecisionCreate(ORMModel):
@@ -155,10 +161,12 @@ class MeetingDecisionCreate(ORMModel):
     project_id: str | None = None
     rationale: str | None = None
     responsible_user_id: str | None = None
+    client_operation_id: str | None = Field(default=None, max_length=64)
 
 
 class SessionNoteCreate(ORMModel):
     body: str = Field(min_length=1)
+    client_operation_id: str | None = Field(default=None, max_length=64)
 
 
 class SessionNoteOut(ORMModel):

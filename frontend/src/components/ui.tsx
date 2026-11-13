@@ -1,6 +1,7 @@
-import { useEffect, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useRef, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { Icon, type IconName } from './icons'
-import { formatDate, humanize, initials, relativeDay } from '../lib/format'
+import { formatDate, formatDueDate, humanize, initials, todayISOValue } from '../lib/format'
 import type { Priority, SessionStatus, TaskStatus } from '../lib/types'
 
 export function Spinner({ className = 'h-4 w-4' }: { className?: string }): ReactNode {
@@ -48,7 +49,7 @@ export function PageHeader({
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight text-slate-900">{title}</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{title}</h1>
         {subtitle && <p className="mt-1 text-sm text-slate-500">{subtitle}</p>}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
@@ -91,11 +92,8 @@ export function SessionStatusBadge({ status }: { status: SessionStatus }): React
 
 export function DueDate({ date, overdue }: { date: string | null; overdue: boolean }): ReactNode {
   if (!date) return <span className="text-xs text-slate-400">No due date</span>
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const parsed = new Date(`${date.slice(0, 10)}T00:00:00`)
   // Closed tasks keep their historical due date rather than reading "overdue".
-  const label = !overdue && parsed < today ? formatDate(date) : relativeDay(date)
+  const label = !overdue && date.slice(0, 10) < todayISOValue() ? formatDate(date) : formatDueDate(date)
   return (
     <span
       className={`inline-flex items-center gap-1 text-xs ${
@@ -125,6 +123,101 @@ export function Avatar({ name, size = 'md' }: { name: string; size?: 'sm' | 'md'
   )
 }
 
+const FOCUSABLE =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
+const overlayStack: string[] = []
+let previousBodyOverflow: string | null = null
+
+function lockPage(): void {
+  if (overlayStack.length > 0) return
+  previousBodyOverflow = document.body.style.overflow
+  document.body.style.overflow = 'hidden'
+  const root = document.getElementById('root')
+  if (root) {
+    root.setAttribute('inert', '')
+    root.setAttribute('aria-hidden', 'true')
+  }
+}
+
+function unlockPage(): void {
+  if (overlayStack.length > 0) return
+  document.body.style.overflow = previousBodyOverflow ?? ''
+  previousBodyOverflow = null
+  const root = document.getElementById('root')
+  if (root) {
+    root.removeAttribute('inert')
+    root.removeAttribute('aria-hidden')
+  }
+}
+
+function useOverlayBehavior(open: boolean, onClose: () => void) {
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+  const id = useId()
+  const titleId = `${id}-title`
+  const descriptionId = `${id}-description`
+
+  useEffect(() => {
+    if (!open) return
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const stackId = `${id}-${Date.now()}-${Math.random()}`
+    overlayStack.push(stackId)
+    lockPage()
+
+    const focusFirst = () => {
+      const panel = panelRef.current
+      if (!panel) return
+      const first = panel.querySelector<HTMLElement>(FOCUSABLE)
+      ;(first ?? panel).focus()
+    }
+    const timer = window.setTimeout(focusFirst, 0)
+
+    const handleKey = (event: KeyboardEvent) => {
+      if (overlayStack[overlayStack.length - 1] !== stackId) return
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        onCloseRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const panel = panelRef.current
+      if (!panel) return
+      const focusable = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+        (element) => !element.hasAttribute('disabled') && element.offsetParent !== null,
+      )
+      if (focusable.length === 0) {
+        event.preventDefault()
+        panel.focus()
+        return
+      }
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleKey, true)
+    return () => {
+      window.clearTimeout(timer)
+      document.removeEventListener('keydown', handleKey, true)
+      const index = overlayStack.indexOf(stackId)
+      if (index !== -1) overlayStack.splice(index, 1)
+      unlockPage()
+      if (trigger?.isConnected) trigger.focus()
+    }
+  }, [open, id])
+
+  return { panelRef, titleId, descriptionId }
+}
+
 export function Modal({
   open,
   onClose,
@@ -142,38 +235,45 @@ export function Modal({
   footer?: ReactNode
   wide?: boolean
 }): ReactNode {
-  useEffect(() => {
-    if (!open) return
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open, onClose])
-
+  const { panelRef, titleId, descriptionId } = useOverlayBehavior(open, onClose)
   if (!open) return null
-  return (
-    <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-slate-950/40 p-4 backdrop-blur-sm sm:items-center">
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-slate-950/40 p-3 backdrop-blur-sm sm:items-center sm:p-4"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
       <div
-        className={`animate-fade-in my-8 w-full rounded-xl border border-slate-200 bg-white shadow-2xl ${
+        ref={panelRef}
+        className={`animate-fade-in my-0 flex max-h-[calc(100dvh-1.5rem)] w-full flex-col rounded-xl border border-slate-200 bg-white shadow-2xl sm:my-8 sm:max-h-[calc(100dvh-2rem)] ${
           wide ? 'max-w-3xl' : 'max-w-lg'
         }`}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={description ? descriptionId : undefined}
+        tabIndex={-1}
       >
         <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-3.5">
           <div>
-            <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
-            {description && <p className="mt-0.5 text-xs text-slate-500">{description}</p>}
+            <h2 id={titleId} className="text-base font-semibold text-slate-900">{title}</h2>
+            {description && <p id={descriptionId} className="mt-0.5 text-sm text-slate-500">{description}</p>}
           </div>
           <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} aria-label="Close">
             <Icon name="x" />
           </button>
         </div>
-        <div className="px-5 py-4">{children}</div>
-        {footer && <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-3">{footer}</div>}
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
+        {footer && (
+          <div className="flex shrink-0 justify-end gap-2 border-t border-slate-200 px-5 py-3">
+            {footer}
+          </div>
+        )}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -256,17 +356,10 @@ export function Drawer({
   children: ReactNode
   footer?: ReactNode
 }): ReactNode {
-  useEffect(() => {
-    if (!open) return
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open, onClose])
-
+  const { panelRef, titleId, descriptionId } = useOverlayBehavior(open, onClose)
   if (!open) return null
-  return (
+
+  return createPortal(
     <div className="fixed inset-0 z-40 flex justify-end bg-slate-950/30 backdrop-blur-[1px]">
       <button
         type="button"
@@ -275,23 +368,31 @@ export function Drawer({
         onClick={onClose}
       />
       <aside
-        className="animate-fade-in relative flex h-full w-full max-w-md flex-col border-l border-slate-200 bg-white shadow-2xl"
+        ref={panelRef}
+        className="animate-fade-in relative flex h-[100dvh] w-full flex-col border-l border-slate-200 bg-white shadow-2xl sm:h-full sm:max-w-md"
         role="dialog"
         aria-modal="true"
-        aria-label={title}
+        aria-labelledby={titleId}
+        aria-describedby={description ? descriptionId : undefined}
+        tabIndex={-1}
       >
-        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
           <div>
-            <h2 className="text-base font-semibold text-slate-900">{title}</h2>
-            {description && <p className="mt-0.5 text-xs text-slate-500">{description}</p>}
+            <h2 id={titleId} className="text-base font-semibold text-slate-900">{title}</h2>
+            {description && <p id={descriptionId} className="mt-0.5 text-sm text-slate-500">{description}</p>}
           </div>
           <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} aria-label="Close">
             <Icon name="x" />
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
-        {footer && <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-3">{footer}</div>}
+        {footer && (
+          <div className="flex shrink-0 justify-end gap-2 border-t border-slate-200 px-5 py-3">
+            {footer}
+          </div>
+        )}
       </aside>
-    </div>
+    </div>,
+    document.body,
   )
 }
