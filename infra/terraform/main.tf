@@ -329,6 +329,7 @@ resource "aws_lambda_function" "worker" {
 }
 
 resource "aws_lambda_event_source_mapping" "transcripts" {
+  count                              = var.transcripts_processing_enabled ? 1 : 0
   event_source_arn                   = aws_sqs_queue.transcripts.arn
   function_name                      = aws_lambda_function.worker.arn
   batch_size                         = 1

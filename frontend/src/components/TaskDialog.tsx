@@ -1,48 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from '../lib/api'
 import { useConfirm } from '../lib/confirm'
-import { formatDate, formatDateTime, formatDueDateForStatus, formatOpenAge, humanize } from '../lib/format'
+import { formatDateTime } from '../lib/format'
 import { useAsync } from '../lib/hooks'
-import { useAuth } from '../lib/auth'
 import { useToast } from '../lib/toast'
+import { useAuth } from '../lib/auth'
 import {
   PRIORITIES,
-  TASK_STATUSES,
+  TASK_STATUS_OPTIONS,
   type Priority,
-  type Project,
+  type Task,
   type TaskDetail,
   type TaskStatus,
+  type TaskUpdate,
   type User,
 } from '../lib/types'
-import { Icon } from './icons'
-import { ErrorBox, Loading, Modal, Spinner } from './ui'
+import { AsyncActionButton, Avatar, Modal, Spinner } from './ui'
+import MorphSelect from './MorphSelect'
+import { displayStatus, priorityTextClass, statusTextClass } from '../lib/taskDisplay'
 
-interface FormState {
-  title: string
-  description: string
-  status: TaskStatus
-  priority: Priority
-  assignee_id: string
-  project_id: string
-  due_date: string
-  is_at_risk: boolean
-  at_risk_reason: string
-}
-
-function formFromTask(task: TaskDetail): FormState {
-  return {
-    title: task.title,
-    description: task.description ?? '',
-    status: task.status,
-    priority: task.priority,
-    assignee_id: task.assignee?.id ?? '',
-    project_id: task.project_id,
-    due_date: task.due_date ?? '',
-    is_at_risk: task.is_at_risk,
-    at_risk_reason: task.at_risk_reason ?? '',
-  }
-}
-
+/**
+ * The single centered task view: update history plus a composer and the three
+ * task fields that usually change during review (status, owner, priority).
+ */
 export default function TaskDialog({
   taskId,
   onClose,
@@ -52,63 +32,231 @@ export default function TaskDialog({
   onClose: () => void
   onChanged?: () => void
 }) {
-  const { me, isManager } = useAuth()
   const { push } = useToast()
+  const { isManager, me } = useAuth()
   const confirm = useConfirm()
   const detail = useAsync<TaskDetail>(() => api.get(`/tasks/${taskId}`), [taskId])
-  const users = useAsync<User[]>(() => api.get('/users'), [])
-  const projects = useAsync<Project[]>(() => api.get('/projects'), [])
-  const [view, setView] = useState<'detail' | 'edit'>('detail')
-  const [form, setForm] = useState<FormState | null>(null)
-  const [baseline, setBaseline] = useState<FormState | null>(null)
-  const initializedFor = useRef<string | null>(null)
-  const dirtyRef = useRef(false)
+  const users = useAsync<User[]>(
+    () => (isManager ? api.get('/users') : Promise.resolve([])),
+    [isManager],
+  )
+  const [text, setText] = useState('')
+  const [blockedBy, setBlockedBy] = useState('')
+  const [status, setStatus] = useState<TaskStatus | null>(null)
+  const [ownerId, setOwnerId] = useState<string | null>(null)
+  const [priority, setPriority] = useState<Priority | null>(null)
+  const [version, setVersion] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
-  const [editBaseVersion, setEditBaseVersion] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
   const [conflict, setConflict] = useState(false)
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
-  const [updateOpen, setUpdateOpen] = useState(false)
-  const [updateText, setUpdateText] = useState('')
-  const [updateError, setUpdateError] = useState<string | null>(null)
-  const [updateBusy, setUpdateBusy] = useState(false)
-  const [updateOperationId, setUpdateOperationId] = useState(() => crypto.randomUUID())
-  const [resolvingId, setResolvingId] = useState<string | null>(null)
-  const [resolution, setResolution] = useState('')
-  const [busyItem, setBusyItem] = useState<string | null>(null)
-
-  const dirty = useMemo(
-    () => Boolean(form && baseline && JSON.stringify(form) !== JSON.stringify(baseline)),
-    [form, baseline],
-  )
-  dirtyRef.current = dirty
+  const [historyEdit, setHistoryEdit] = useState<{
+    id: string
+    draft: string
+    expectedVersion: number
+  } | null>(null)
+  const [historyBusyId, setHistoryBusyId] = useState<string | null>(null)
+  const historyMutationRef = useRef(false)
+  const [historyFeedback, setHistoryFeedback] = useState<{
+    id: string
+    message: string
+    tone: 'error' | 'info'
+    refreshable: boolean
+  } | null>(null)
+  const [historyRetryVersion, setHistoryRetryVersion] = useState<{
+    id: string
+    version: number
+  } | null>(null)
 
   useEffect(() => {
     if (!detail.data) return
-    const next = formFromTask(detail.data)
-    if (initializedFor.current !== detail.data.id) {
-      initializedFor.current = detail.data.id
-      setForm(next)
-      setBaseline(next)
-      return
-    }
-    // Same-record background refresh: never clobber unsaved edits.
-    if (!dirtyRef.current) {
-      setForm(next)
-      setBaseline(next)
-    }
+    setStatus((current) => current ?? displayStatus(detail.data!.status))
+    setOwnerId((current) => current ?? detail.data!.assignee?.id ?? '')
+    setPriority((current) => current ?? detail.data!.priority)
+    setVersion((current) => current ?? detail.data!.version)
   }, [detail.data])
 
+  // Initialise the task-level Blocked by field once per task. Background
+  // refreshes must not overwrite what the user is typing.
+  useEffect(() => {
+    if (detail.data) setBlockedBy(detail.data.blocked_by ?? '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail.data?.id])
+
+  const updates = useMemo(
+    () =>
+      [...(detail.data?.updates ?? [])].sort((a, b) =>
+        b.created_at.localeCompare(a.created_at),
+      ),
+    [detail.data?.updates],
+  )
+
+  const data = detail.data
+  const hasText = Boolean(text.trim())
+  const statusChanged = Boolean(data && status && status !== displayStatus(data.status))
+  const blockedByChanged = Boolean(
+    data && blockedBy.trim() !== (data.blocked_by ?? '').trim(),
+  )
+  const currentOwnerId = ownerId ?? data?.assignee?.id ?? ''
+  const currentPriority = priority ?? data?.priority ?? 'medium'
+  const ownerChanged = Boolean(
+    data && ownerId !== null && ownerId !== (data.assignee?.id ?? ''),
+  )
+  const priorityChanged = Boolean(data && priority !== null && priority !== data.priority)
+  const dirty = hasText || statusChanged || blockedByChanged || ownerChanged || priorityChanged
+  const mutationBusy = saving || historyBusyId !== null
+
+  const ownerOptions = useMemo(() => {
+    const options = [
+      { value: '', label: 'Unassigned', unassigned: true },
+      ...(users.data ?? []).map((user) => ({ value: user.id, label: user.full_name })),
+    ]
+    if (data?.assignee && !options.some((option) => option.value === data.assignee?.id)) {
+      options.push({ value: data.assignee.id, label: data.assignee.full_name })
+    }
+    return options
+  }, [data?.assignee, users.data])
+
+  async function save() {
+    if (
+      !detail.data ||
+      saving ||
+      historyBusyId !== null ||
+      historyMutationRef.current ||
+      historyEdit !== null ||
+      !dirty
+    )
+      return
+    setSaving(true)
+    setError(null)
+    setInfo(null)
+    setConflict(false)
+    const nextBlockedBy = blockedBy.trim() || null
+    let baseVersion = version ?? detail.data.version
+    let statusHandledByTaskPatch = false
+    try {
+      // Reassigning, reprioritising and blocking are Task fields. Bundle them
+      // into one version-checked patch; a status-only change joins that patch.
+      const patch: Record<string, unknown> = { expected_version: baseVersion }
+      if (blockedByChanged) patch.blocked_by = nextBlockedBy
+      if (ownerChanged) patch.assignee_id = currentOwnerId || null
+      if (priorityChanged) patch.priority = currentPriority
+      if (statusChanged && status && !hasText) {
+        patch.status = status
+        statusHandledByTaskPatch = true
+      }
+      if (Object.keys(patch).length > 1) {
+        const updated = await api.patch<Task>(`/tasks/${taskId}`, patch)
+        baseVersion = updated.version
+        setVersion(updated.version)
+        setBlockedBy(updated.blocked_by ?? '')
+        setStatus(displayStatus(updated.status))
+        setOwnerId(updated.assignee?.id ?? '')
+        setPriority(updated.priority)
+      }
+
+      if (hasText) {
+        // A new progress record can carry the optional status change
+        // atomically. Other task fields were already applied above.
+        await api.post(`/tasks/${taskId}/updates`, {
+          progress: text.trim(),
+          ...(statusChanged && status && !statusHandledByTaskPatch ? { status } : {}),
+          expected_version: baseVersion,
+          client_operation_id: crypto.randomUUID(),
+        })
+        push('Update saved.')
+      } else if (statusChanged && status && !statusHandledByTaskPatch) {
+        await api.patch(`/tasks/${taskId}`, {
+          status,
+          expected_version: baseVersion,
+        })
+        push('Task changes saved.')
+      } else {
+        push('Task changes saved.')
+      }
+      setText('')
+      setVersion(null)
+      detail.refresh()
+      onChanged?.()
+    } catch (caught) {
+      if (caught instanceof ApiError) {
+        if (caught.status === 409) {
+          setConflict(true)
+          setError('This task changed since you opened it. Load the latest state, review your changes, then save again.')
+        } else {
+          setError(caught.message)
+        }
+      } else {
+        setError(caught instanceof Error ? caught.message : String(caught))
+      }
+      throw caught
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const knownTaskVersion = () =>
+    Math.max(detail.data?.version ?? 0, version ?? 0)
+
+  function reconcileOwnVersion(expectedVersion: number) {
+    // A successful history mutation with expectedVersion proves the task was at
+    // exactly that version, so only *our* bump can move the composer base.
+    setVersion((current) =>
+      current === null || current === expectedVersion ? expectedVersion + 1 : current,
+    )
+    setHistoryEdit((current) =>
+      current && current.expectedVersion === expectedVersion
+        ? { ...current, expectedVersion: expectedVersion + 1 }
+        : current,
+    )
+  }
+
+  function historyEditDirty(): boolean {
+    if (!historyEdit) return false
+    const original = updates.find((item) => item.id === historyEdit.id)?.progress ?? ''
+    return historyEdit.draft.trim() !== original.trim()
+  }
+
+  async function canLeaveHistory(): Promise<boolean> {
+    if (!historyEdit || !historyEditDirty()) return true
+    return confirm({
+      title: 'Discard update changes?',
+      confirmLabel: 'Discard',
+      cancelLabel: 'Keep editing',
+      tone: 'danger',
+    })
+  }
+
+  async function startHistoryEdit(update: TaskUpdate) {
+    if (mutationBusy) return
+    if (!(await canLeaveHistory())) return
+    setHistoryFeedback(null)
+    setHistoryEdit({
+      id: update.id,
+      draft: update.progress,
+      expectedVersion: Math.max(
+        knownTaskVersion(),
+        historyRetryVersion?.id === update.id ? historyRetryVersion.version : 0,
+      ),
+    })
+    setHistoryRetryVersion(null)
+  }
+
+  async function cancelHistoryEdit() {
+    if (mutationBusy) return
+    if (!(await canLeaveHistory())) return
+    setHistoryEdit(null)
+    setHistoryFeedback(null)
+  }
+
   async function requestClose() {
-    if (saving || updateBusy) {
+    if (mutationBusy || historyMutationRef.current) {
       push('A save is in progress. Wait for it to finish.', 'info')
       return
     }
-    if (dirty || (updateOpen && updateText.trim())) {
+    if (historyEditDirty() || dirty) {
       const discard = await confirm({
         title: 'Discard your changes?',
-        description: 'Your edits to this task have not been saved.',
         confirmLabel: 'Discard',
         cancelLabel: 'Keep editing',
         tone: 'danger',
@@ -118,505 +266,409 @@ export default function TaskDialog({
     onClose()
   }
 
-  async function save() {
-    if (!form || !detail.data || saving) return
-    const errors: Record<string, string> = {}
-    if (!form.title.trim()) errors.title = 'Title is required.'
-    setFieldErrors(errors)
-    if (Object.keys(errors).length > 0) return
-    setSaving(true)
-    setError(null)
-    setInfo(null)
-    setConflict(false)
+  function historyError(caught: unknown, updateId: string) {
+    if (caught instanceof ApiError) {
+      if (caught.status === 409) {
+        setHistoryFeedback({
+          id: updateId,
+          message:
+            'This task changed while you were editing this update. Refresh the latest state, review your text, then retry.',
+          tone: 'error',
+          refreshable: true,
+        })
+        return
+      }
+      if (caught.status === 404) {
+        setHistoryFeedback({
+          id: updateId,
+          message: 'This update no longer exists. Refresh the latest history to continue.',
+          tone: 'error',
+          refreshable: true,
+        })
+        return
+      }
+      setHistoryFeedback({ id: updateId, message: caught.message, tone: 'error', refreshable: false })
+      return
+    }
+    setHistoryFeedback({
+      id: updateId,
+      message: caught instanceof Error ? caught.message : String(caught),
+      tone: 'error',
+      refreshable: false,
+    })
+  }
+
+  async function refreshHistory(updateId: string) {
     try {
-      await api.patch(`/tasks/${taskId}`, {
-        title: form.title.trim(),
-        description: form.description || null,
-        status: form.status,
-        priority: form.priority,
-        ...(isManager
-          ? { assignee_id: form.assignee_id || null, project_id: form.project_id }
-          : {}),
-        due_date: form.due_date || null,
-        is_at_risk: form.is_at_risk,
-        at_risk_reason: form.is_at_risk ? form.at_risk_reason || null : null,
-        expected_version: editBaseVersion ?? detail.data.version,
+      const latest = await api.get<TaskDetail>(`/tasks/${taskId}`)
+      const stillExists = latest.updates.some((item) => item.id === updateId)
+      setHistoryEdit((current) =>
+        current?.id === updateId
+          ? { ...current, expectedVersion: latest.version }
+          : current,
+      )
+      detail.refresh()
+      if (!stillExists) {
+        setHistoryEdit((current) => (current?.id === updateId ? null : current))
+        setHistoryFeedback(null)
+        setHistoryRetryVersion(null)
+        setInfo('That update no longer exists. The latest history is shown.')
+        return
+      }
+      setHistoryRetryVersion({ id: updateId, version: latest.version })
+      setHistoryFeedback({
+        id: updateId,
+        message: 'Latest state loaded. Review your text and retry.',
+        tone: 'info',
+        refreshable: false,
       })
-      push('Task changes saved.')
-      setBaseline(form)
-      setView('detail')
+    } catch (caught) {
+      historyError(caught, updateId)
+    }
+  }
+
+  async function saveHistoryEdit() {
+    if (!historyEdit || mutationBusy || historyMutationRef.current) return
+    const progress = historyEdit.draft.trim()
+    if (!progress) return
+    const edit = historyEdit
+    historyMutationRef.current = true
+    setHistoryBusyId(edit.id)
+    setHistoryFeedback(null)
+    try {
+      await api.patch(`/tasks/${taskId}/updates/${edit.id}`, {
+        progress,
+        expected_version: edit.expectedVersion,
+      })
+      reconcileOwnVersion(edit.expectedVersion)
+      setHistoryEdit(null)
+      setHistoryRetryVersion(null)
+      setInfo(null)
+      push('Update changed.')
       detail.refresh()
       onChanged?.()
     } catch (caught) {
-      if (caught instanceof ApiError) {
-        if (caught.status === 409) {
-          setConflict(true)
-          setError('This task changed while you were editing. Load the latest state and review your changes.')
-        } else {
-          setError(caught.message)
-        }
-      } else {
-        setError(caught instanceof Error ? caught.message : String(caught))
-      }
+      historyError(caught, edit.id)
     } finally {
-      setSaving(false)
+      historyMutationRef.current = false
+      setHistoryBusyId(null)
+    }
+  }
+
+  async function deleteHistoryUpdate(updateId: string) {
+    if (mutationBusy || historyMutationRef.current) return
+    const confirmed = await confirm({
+      title: 'Delete this update?',
+      confirmLabel: 'Delete update',
+      cancelLabel: 'Cancel',
+      tone: 'danger',
+    })
+    if (!confirmed) return
+    const expectedVersion =
+      historyEdit?.id === updateId
+        ? historyEdit.expectedVersion
+        : historyRetryVersion?.id === updateId
+          ? historyRetryVersion.version
+          : knownTaskVersion()
+    historyMutationRef.current = true
+    setHistoryBusyId(updateId)
+    setHistoryFeedback(null)
+    try {
+      const suffix = expectedVersion ? `?expected_version=${expectedVersion}` : ''
+      await api.delete(`/tasks/${taskId}/updates/${updateId}${suffix}`)
+      reconcileOwnVersion(expectedVersion)
+      setHistoryEdit((current) => (current?.id === updateId ? null : current))
+      setHistoryRetryVersion(null)
+      push('Update deleted.')
+      detail.refresh()
+      onChanged?.()
+    } catch (caught) {
+      historyError(caught, updateId)
+    } finally {
+      historyMutationRef.current = false
+      setHistoryBusyId(null)
     }
   }
 
   async function loadLatest() {
     try {
+      const previous = detail.data
       const latest = await api.get<TaskDetail>(`/tasks/${taskId}`)
-      setEditBaseVersion(latest.version)
+      setVersion(latest.version)
+      // Preserve deliberate edits; refresh only untouched fields.
+      setStatus((current) =>
+        current && previous && current !== displayStatus(previous.status)
+          ? current
+          : displayStatus(latest.status),
+      )
+      setBlockedBy((current) =>
+        previous && current.trim() !== (previous.blocked_by ?? '').trim()
+          ? current
+          : latest.blocked_by ?? '',
+      )
+      setOwnerId((current) =>
+        previous && current !== null && current !== (previous.assignee?.id ?? '')
+          ? current
+          : latest.assignee?.id ?? '',
+      )
+      setPriority((current) =>
+        previous && current !== null && current !== previous.priority
+          ? current
+          : latest.priority,
+      )
       setConflict(false)
       setError(null)
-      setInfo('Latest task state loaded. Review your edits, then save again.')
-      setView('edit')
+      setInfo('Latest state loaded. Review your changes, then save again.')
       detail.refresh()
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
     }
   }
 
-  async function saveUpdate() {
-    if (!updateText.trim() || !detail.data || updateBusy) return
-    setUpdateBusy(true)
-    setUpdateError(null)
-    const operationId = updateOperationId
-    try {
-      await api.post(`/tasks/${taskId}/updates`, {
-        progress: updateText.trim(),
-        client_operation_id: operationId,
-      })
-      push('Update saved.')
-      setUpdateText('')
-      setUpdateOpen(false)
-      setUpdateOperationId(crypto.randomUUID())
-      detail.refresh()
-      onChanged?.()
-    } catch (caught) {
-      setUpdateError(caught instanceof Error ? caught.message : String(caught))
-    } finally {
-      setUpdateBusy(false)
-    }
-  }
-
-  async function resolve(blockerId: string) {
-    if (!resolution.trim()) return
-    setBusyItem(blockerId)
-    try {
-      await api.patch(`/blockers/${blockerId}/resolve`, {
-        resolution_details: resolution.trim(),
-      })
-      push('Help request resolved.')
-      setResolvingId(null)
-      setResolution('')
-      detail.refresh()
-      onChanged?.()
-    } catch (caught) {
-      push((caught as Error).message, 'error')
-    } finally {
-      setBusyItem(null)
-    }
-  }
-
-  async function completeAction(actionId: string) {
-    setBusyItem(actionId)
-    try {
-      await api.patch(`/action-items/${actionId}`, { status: 'completed' })
-      push('Follow-up completed.')
-      detail.refresh()
-      onChanged?.()
-    } catch (caught) {
-      push((caught as Error).message, 'error')
-    } finally {
-      setBusyItem(null)
-    }
-  }
-
-  const data = detail.data
-  const canResolve = (blocker: TaskDetail['blockers'][number]) =>
-    isManager || blocker.owner?.id === me?.id || blocker.reported_by?.id === me?.id
-  const canComplete = (ownerId: string | null) => isManager || ownerId === me?.id
-  const openBlockers = data?.blockers.filter((blocker) => blocker.status === 'open') ?? []
-  const openActions = data?.action_items.filter((item) => item.status === 'open') ?? []
-  const closedBlockers = data?.blockers.filter((blocker) => blocker.status !== 'open') ?? []
-  const closedActions = data?.action_items.filter((item) => item.status !== 'open') ?? []
-
   return (
     <Modal
       open
-      onClose={requestClose}
-      title={view === 'edit' ? 'Edit task details' : 'Task'}
-      description={
-        data
-          ? `${data.project_name ?? 'No project'} · ${humanize(data.status)}`
-          : undefined
-      }
+      onClose={() => void requestClose()}
+      title={data ? `${data.public_id} · ${data.title}` : 'Task updates'}
       wide
       footer={
-        view === 'edit' ? (
-          <>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => {
-                if (form) setForm(baseline)
-                setView('detail')
-                setError(null)
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={save}
-              disabled={saving || !dirty}
-            >
-              {saving ? <Spinner /> : <Icon name="check" />} Save changes
-            </button>
-          </>
-        ) : (
-          <>
-            <button type="button" className="btn btn-secondary" onClick={requestClose}>
-              Close
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => {
-                setEditBaseVersion(data?.version ?? null)
-                setView('edit')
-              }}
-              disabled={!data}
-            >
-              <Icon name="arrowRight" /> Edit details
-            </button>
-          </>
-        )
+        <button type="button" className="btn btn-secondary" onClick={() => void requestClose()}>
+          Close
+        </button>
       }
     >
       {detail.loading && !data ? (
-        <Loading />
-      ) : detail.error || !data || !form ? (
-        <ErrorBox message={detail.error ?? 'Task not found'} onRetry={detail.refresh} />
-      ) : view === 'edit' ? (
-        <EditView
-          form={form}
-          setForm={setForm}
-          fieldErrors={fieldErrors}
-          isManager={isManager}
-          users={users.data ?? []}
-          projects={projects.data ?? []}
-        />
+        <div className="py-8 text-center text-sm text-ink-muted">
+          <Spinner className="h-5 w-5" /> Loading updates…
+        </div>
+      ) : detail.error || !data ? (
+        <p className="rounded-control bg-danger-tint px-3 py-2 text-sm text-danger">
+          {detail.error ?? 'Task not found'}
+        </p>
       ) : (
-        <div className="space-y-5">
-          <div>
-            <h2 className="text-lg font-semibold leading-snug text-slate-900">{data.title}</h2>
-            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-600">
-              <span>Status: <span className="font-medium text-slate-800">{humanize(data.status)}</span></span>
-              <span>Owner: <span className="font-medium text-slate-800">{data.assignee?.full_name ?? 'Unassigned'}</span></span>
-              <span>
-                Due: <span className="font-medium text-slate-800">
-                  {data.due_date ? formatDueDateForStatus(data.due_date, data.status === 'done' || data.status === 'canceled') : 'None'}
-                </span>
-              </span>
-            </div>
-            {data.description && <p className="mt-3 whitespace-pre-wrap text-sm text-slate-700">{data.description}</p>}
-          </div>
-
+        <div className="space-y-4">
           <section>
-            <div className="flex items-center justify-between gap-2">
-              <h3 className="text-base font-semibold text-slate-900">Latest update</h3>
-              {!updateOpen && (
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setUpdateOpen(true)}>
-                  <Icon name="plus" /> Add update
-                </button>
-              )}
-            </div>
-            {data.updates.length > 0 ? (
-              <div className="mt-2 rounded-lg bg-slate-50 p-3">
-                <p className="text-sm text-slate-700">{data.updates[data.updates.length - 1].progress}</p>
-                <p className="mt-1 text-xs text-slate-500">
-                  {data.updates[data.updates.length - 1].attributed_to?.full_name ??
-                    data.updates[data.updates.length - 1].author?.full_name ??
-                    '—'}{' '}
-                  · {formatDateTime(data.updates[data.updates.length - 1].created_at)}
-                </p>
-              </div>
+            <h3 className="text-sm font-semibold text-ink">Updates</h3>
+            {updates.length === 0 ? (
+              <p className="mt-2 text-sm text-ink-muted">No updates yet.</p>
             ) : (
-              <p className="mt-2 text-sm text-slate-500">No updates yet.</p>
-            )}
-            {updateOpen && (
-              <div className="mt-2 rounded-lg border border-slate-200 p-3">
-                <label className="label" htmlFor="task-inline-update">What changed?</label>
-                <textarea
-                  id="task-inline-update"
-                  className="textarea text-base"
-                  value={updateText}
-                  onChange={(event) => setUpdateText(event.target.value)}
-                  autoFocus
-                />
-                {updateError && <p className="mt-1 text-sm text-rose-700">{updateError}</p>}
-                <div className="mt-2 flex justify-end gap-2">
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => {
-                      setUpdateOpen(false)
-                      setUpdateError(null)
-                    }}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm"
-                    onClick={saveUpdate}
-                    disabled={updateBusy || !updateText.trim()}
-                  >
-                    {updateBusy ? <Spinner /> : <Icon name="send" />} Save update
-                  </button>
-                </div>
-              </div>
-            )}
-          </section>
+              <ol className="mt-2 space-y-2">
+                {updates.map((update) => {
+                  const person = update.attributed_to ?? update.author
+                  const canModify =
+                    isManager || Boolean(me?.id && update.author?.id === me.id)
+                  const isEditing = historyEdit?.id === update.id
+                  const isBusy = historyBusyId === update.id
+                  const feedback = historyFeedback?.id === update.id ? historyFeedback : null
+                  return (
+                    <li
+                      key={update.id}
+                      aria-busy={isBusy || undefined}
+                      className="relative rounded-control border border-hairline bg-recessed/40 px-3 py-2.5"
+                    >
+                      <div className="flex items-center gap-2">
+                        {person ? <Avatar name={person.full_name} size="sm" /> : null}
+                        <span className="text-sm font-medium text-ink">
+                          {person?.full_name ?? 'Unknown'}
+                        </span>
+                        <span className="ml-auto text-xs text-ink-subtle">
+                          {formatDateTime(update.created_at)}
+                        </span>
+                      </div>
 
-          <section>
-            <h3 className="text-base font-semibold text-slate-900">Help needed</h3>
-            {openBlockers.length === 0 ? (
-              <p className="mt-2 text-sm text-slate-500">No open help requests.</p>
-            ) : (
-              <div className="mt-2 space-y-2">
-                {openBlockers.map((blocker) => (
-                  <div key={blocker.id} className="rounded-lg border border-rose-200 bg-rose-50/40 p-3">
-                    <p className="text-sm text-slate-800">{blocker.description}</p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      Help owner: {blocker.owner?.full_name ?? 'Unassigned — needs an owner'} · {formatOpenAge(blocker.age_days)}
-                    </p>
-                    {canResolve(blocker) && (
-                      <>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-sm mt-2"
-                          onClick={() => setResolvingId(resolvingId === blocker.id ? null : blocker.id)}
-                        >
-                          {resolvingId === blocker.id ? 'Cancel' : 'Resolve'}
-                        </button>
-                        {resolvingId === blocker.id && (
-                          <div className="mt-2 space-y-2">
-                            <textarea
-                              className="textarea min-h-[56px]"
-                              placeholder="How was it resolved?"
-                              value={resolution}
-                              onChange={(event) => setResolution(event.target.value)}
-                            />
+                      {isEditing ? (
+                        <div className="mt-2 space-y-2">
+                          <label className="label" htmlFor={`edit-update-${update.id}`}>
+                            Edit update text
+                          </label>
+                          <textarea
+                            id={`edit-update-${update.id}`}
+                            className="textarea"
+                            value={historyEdit.draft}
+                            autoFocus
+                            disabled={mutationBusy}
+                            onChange={(event) =>
+                              setHistoryEdit((current) =>
+                                current?.id === update.id
+                                  ? { ...current, draft: event.target.value }
+                                  : current,
+                              )
+                            }
+                          />
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => void cancelHistoryEdit()}
+                              disabled={mutationBusy}
+                            >
+                              Cancel
+                            </button>
                             <button
                               type="button"
                               className="btn btn-primary btn-sm"
-                              disabled={busyItem === blocker.id || !resolution.trim()}
-                              onClick={() => resolve(blocker.id)}
+                              onClick={() => void saveHistoryEdit()}
+                              disabled={mutationBusy || !historyEdit.draft.trim()}
                             >
-                              Save resolution
+                              {isBusy ? <Spinner className="h-3 w-3" /> : null} Save changes
                             </button>
                           </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                ))}
-              </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="mt-1.5 pr-24">
+                            <p className="whitespace-pre-wrap text-sm text-ink">{update.progress}</p>
+                            {update.next_steps && (
+                              <p className="mt-1 text-xs text-ink-muted">Next: {update.next_steps}</p>
+                            )}
+                          </div>
+                          {canModify && (
+                            <div className="absolute bottom-2 right-2 flex items-center gap-0.5 rounded-md border border-hairline bg-raised/95 p-0.5 shadow-card backdrop-blur-[2px]">
+                              <button
+                                type="button"
+                                className="rounded px-1.5 py-1 text-[10.5px] font-medium text-ink-subtle transition-colors duration-140 hover:bg-recessed hover:text-ink disabled:opacity-50"
+                                onClick={() => void startHistoryEdit(update)}
+                                disabled={mutationBusy}
+                                aria-label={`Edit update from ${formatDateTime(update.created_at)}`}
+                              >
+                                Edit
+                              </button>
+                              <span aria-hidden="true" className="h-3 w-px bg-hairline" />
+                              <button
+                                type="button"
+                                className="rounded px-1.5 py-1 text-[10.5px] font-medium text-ink-subtle transition-colors duration-140 hover:bg-danger-tint hover:text-danger disabled:opacity-50"
+                                onClick={() => void deleteHistoryUpdate(update.id)}
+                                disabled={mutationBusy}
+                                aria-label={`Delete update from ${formatDateTime(update.created_at)}`}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      {feedback && (
+                        <div
+                          className={`mt-2 rounded-control px-2.5 py-2 pr-20 text-xs ${
+                            feedback.tone === 'error'
+                              ? 'bg-danger-tint text-danger'
+                              : 'bg-info-tint text-info'
+                          }`}
+                        >
+                          <p>{feedback.message}</p>
+                          {feedback.refreshable && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm mt-1.5"
+                              onClick={() => void refreshHistory(update.id)}
+                            >
+                              Refresh latest
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </li>
+                  )
+                })}
+              </ol>
             )}
           </section>
 
-          <section>
-            <h3 className="text-base font-semibold text-slate-900">Follow-ups</h3>
-            {openActions.length === 0 ? (
-              <p className="mt-2 text-sm text-slate-500">No open follow-ups.</p>
-            ) : (
-              <div className="mt-2 space-y-2">
-                {openActions.map((item) => (
-                  <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 p-3">
-                    <div className="min-w-0">
-                      <p className="text-sm text-slate-800">{item.description}</p>
-                      <p className="text-xs text-slate-500">
-                        {item.owner?.full_name ?? 'Unassigned'}
-                        {item.due_date ? ` · ${formatDueDateForStatus(item.due_date, item.status === 'completed' || item.status === 'canceled')}` : ''}
-                      </p>
-                    </div>
-                    {canComplete(item.owner?.id ?? null) && (
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-sm"
-                        disabled={busyItem === item.id}
-                        onClick={() => completeAction(item.id)}
-                      >
-                        Mark done
-                      </button>
+          <section className="border-t border-hairline pt-3">
+            <div className="space-y-2">
+              <div>
+                <label className="label" htmlFor="task-update-text">Add update <span className="text-danger">*</span></label>
+                <textarea
+                  id="task-update-text"
+                  data-autofocus
+                  className="textarea"
+                  value={text}
+                  onChange={(event) => setText(event.target.value)}
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="task-update-blocked">Blocked by (optional)</label>
+                <input
+                  id="task-update-blocked"
+                  className="input"
+                  value={blockedBy}
+                  onChange={(event) => setBlockedBy(event.target.value)}
+                  placeholder="Leave empty when nothing is blocking this task."
+                />
+              </div>
+              <div className="flex flex-wrap items-end justify-between gap-2">
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="w-[150px]">
+                    <span className="mb-1 block text-sm font-medium text-ink-muted">Status</span>
+                    <MorphSelect
+                      valueClassName={statusTextClass(status ?? data.status)}
+                      value={status ?? displayStatus(data.status)}
+                      options={TASK_STATUS_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+                      onChange={(value) => setStatus(value as TaskStatus)}
+                      label="Update status"
+                    />
+                  </div>
+                  <div className="w-[190px]">
+                    <span className="mb-1 block text-sm font-medium text-ink-muted">Owner</span>
+                    {isManager ? (
+                      <MorphSelect
+                        value={currentOwnerId}
+                        options={ownerOptions}
+                        onChange={setOwnerId}
+                        label="Update owner"
+                        avatar
+                        searchable={(users.data?.length ?? 0) > 8}
+                        searchPlaceholder="Search people…"
+                        disabled={saving}
+                      />
+                    ) : (
+                      <div className="flex min-h-[40px] items-center gap-2 rounded-control border border-hairline bg-recessed px-3 text-sm text-ink-muted">
+                        {data.assignee ? <Avatar name={data.assignee.full_name} size="sm" /> : null}
+                        <span className="truncate">{data.assignee?.full_name ?? 'Unassigned'}</span>
+                      </div>
                     )}
                   </div>
-                ))}
+                  <div className="w-[140px]">
+                    <span className="mb-1 block text-sm font-medium text-ink-muted">Priority</span>
+                    <MorphSelect
+                      valueClassName={priorityTextClass(currentPriority)}
+                      value={currentPriority}
+                      options={PRIORITIES.map((option) => ({ value: option.value, label: option.label }))}
+                      onChange={(value) => setPriority(value as Priority)}
+                      label="Update priority"
+                      disabled={saving}
+                    />
+                  </div>
+                </div>
+                <AsyncActionButton
+                  label="Save update"
+                  pendingLabel="Saving…"
+                  successLabel="Saved"
+                  onAction={save}
+                  onError={(message) => setError(message)}
+                  disabled={mutationBusy || !dirty || historyEdit !== null}
+                />
               </div>
-            )}
+            </div>
           </section>
 
-          {(closedBlockers.length > 0 || closedActions.length > 0 || data.updates.length > 1) && (
-            <details>
-              <summary className="cursor-pointer text-sm font-semibold text-slate-700">
-                History
-              </summary>
-              <div className="mt-2 space-y-2">
-                {data.updates.slice(0, -1).reverse().map((update) => (
-                  <div key={update.id} className="rounded-lg bg-slate-50 p-3">
-                    <p className="text-sm text-slate-700">{update.progress}</p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {update.attributed_to?.full_name ?? update.author?.full_name ?? '—'} ·{' '}
-                      {formatDate(update.created_at)}
-                    </p>
-                  </div>
-                ))}
-                {closedBlockers.map((blocker) => (
-                  <p key={blocker.id} className="text-sm text-slate-500">
-                    Resolved help request: {blocker.description}
-                    {blocker.resolution_details ? ` — ${blocker.resolution_details}` : ''}
-                  </p>
-                ))}
-                {closedActions.map((item) => (
-                  <p key={item.id} className="text-sm text-slate-500 line-through">
-                    Follow-up completed: {item.description}
-                  </p>
-                ))}
-              </div>
-            </details>
+          {error && (
+            <div className="rounded-control bg-danger-tint px-3 py-2 text-sm text-danger">
+              <p>{error}</p>
+              {conflict && (
+                <button type="button" className="btn btn-secondary btn-sm mt-2" onClick={loadLatest}>
+                  Load latest state
+                </button>
+              )}
+            </div>
           )}
-
-        </div>
-      )}
-      {error && (
-        <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
-          <p>{error}</p>
-          {conflict && (
-            <button type="button" className="btn btn-secondary btn-sm mt-2" onClick={loadLatest}>
-              Load latest state
-            </button>
+          {info && (
+            <p className="rounded-control bg-info-tint px-3 py-2 text-sm text-info">{info}</p>
           )}
         </div>
-      )}
-      {info && (
-        <p className="mt-4 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">{info}</p>
       )}
     </Modal>
-  )
-}
-
-function EditView({
-  form,
-  setForm,
-  fieldErrors,
-  isManager,
-  users,
-  projects,
-}: {
-  form: FormState
-  setForm: (next: FormState) => void
-  fieldErrors: Record<string, string>
-  isManager: boolean
-  users: User[]
-  projects: Project[]
-}) {
-  return (
-    <div className="space-y-3">
-      <div>
-        <label className="label" htmlFor="task-title">Title</label>
-        <input
-          id="task-title"
-          className="input text-base"
-          value={form.title}
-          onChange={(event) => setForm({ ...form, title: event.target.value })}
-          autoFocus
-        />
-        {fieldErrors.title && <p className="mt-1 text-sm text-rose-700">{fieldErrors.title}</p>}
-      </div>
-      <div>
-        <label className="label" htmlFor="task-description">Description</label>
-        <textarea
-          id="task-description"
-          className="textarea"
-          value={form.description}
-          onChange={(event) => setForm({ ...form, description: event.target.value })}
-        />
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div>
-          <label className="label" htmlFor="task-status">Status</label>
-          <select id="task-status" className="select" value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as TaskStatus })}>
-            {TASK_STATUSES.map((status) => (
-              <option key={status.value} value={status.value}>{status.label}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="label" htmlFor="task-due">Due date</label>
-          <input id="task-due" type="date" className="input" value={form.due_date} onChange={(event) => setForm({ ...form, due_date: event.target.value })} />
-        </div>
-        <div>
-          <label className="label" htmlFor="task-owner">Owner</label>
-          <select
-            id="task-owner"
-            className="select"
-            value={form.assignee_id}
-            disabled={!isManager}
-            onChange={(event) => setForm({ ...form, assignee_id: event.target.value })}
-          >
-            <option value="">Unassigned</option>
-            {users.map((user) => (
-              <option key={user.id} value={user.id}>{user.full_name}</option>
-            ))}
-          </select>
-          {!isManager && <p className="mt-1 text-sm text-slate-500">Only a manager can reassign work.</p>}
-        </div>
-        <div>
-          <label className="label" htmlFor="task-project">Project</label>
-          <select
-            id="task-project"
-            className="select"
-            value={form.project_id}
-            disabled={!isManager}
-            onChange={(event) => setForm({ ...form, project_id: event.target.value })}
-          >
-            {projects.map((project) => (
-              <option key={project.id} value={project.id}>{project.name}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="label" htmlFor="task-priority">Priority</label>
-          <select id="task-priority" className="select" value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value as Priority })}>
-            {PRIORITIES.map((priority) => (
-              <option key={priority.value} value={priority.value}>{priority.label}</option>
-            ))}
-          </select>
-        </div>
-        <div className="flex flex-col justify-end">
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              checked={form.is_at_risk}
-              onChange={(event) => setForm({ ...form, is_at_risk: event.target.checked })}
-              className="h-4 w-4 rounded border-slate-300"
-            />
-            Flag as at risk
-          </label>
-          {form.is_at_risk && (
-            <input
-              className="input mt-1.5"
-              placeholder="What is the risk?"
-              value={form.at_risk_reason}
-              onChange={(event) => setForm({ ...form, at_risk_reason: event.target.value })}
-            />
-          )}
-        </div>
-      </div>
-    </div>
   )
 }

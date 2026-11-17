@@ -44,7 +44,7 @@ erDiagram
 
 ### projects / project_members
 
-`projects`: `name`, `description`, `owner_id`, `status` (`active`, `paused`, `completed`, `archived`).
+`projects`: `name`, `description`, `owner_id`, `status` (`active`, `paused`, `completed`, `archived`), `system_key` (nullable, unique; `ad_hoc` designates the provisioned default project).
 
 `project_members`: join table with `role` (`lead`, `member`); unique on `(project_id, user_id)`. The owner is also kept as a member for visibility.
 
@@ -69,9 +69,9 @@ Indexes: `(assignee_id, status)`, `(project_id, status)`, `due_date`, `updated_a
 
 **Blockers are not a status.** `status` and blocker state are orthogonal: a task can be `in_progress` and `is_blocked=true` (computed from open blockers).
 
-### task_updates (append-only)
+### task_updates (mutable text, append-only audit)
 
-One row per progress report. Never overwritten.
+One row per progress report. Its text may be edited or deleted by the recorded author or a manager/admin; author, attribution, session, source and timestamp remain fixed, and the prior value is retained in `audit_events`.
 
 `task_id`, `author_id`, `attributed_to_user_id` (manager capturing on behalf of an employee), `session_id`, `source` (`pre_meeting`, `standup`, `task_interface`, `ai_approved`, `system`), `progress`, `next_steps`, `client_operation_id`, `created_at`.
 
@@ -190,7 +190,7 @@ No update/delete API exists for audit rows. Corrections are new events.
 4. A session date is unique. A participant exists at most once per session.
 5. Completing a session does not change blocker/action-item state.
 6. A logical create/update retry uses the same `client_operation_id` and cannot create a second record.
-7. `task_updates` and `audit_events` are append-only.
+7. `audit_events` are append-only; `task_updates` text may be edited/deleted with an audit record.
 8. A task edit and its audit event commit together.
 9. A task edit with a stale `expected_version` is rejected.
 10. An AI proposal can only be applied after approval, and only if `Task.version` still matches `base_task_version`.
@@ -209,7 +209,7 @@ No update/delete API exists for audit rows. Corrections are new events.
 | Today's short update | `daily_updates` where `user_id=?` and `update_date=today` |
 | Participant daily reporting | `daily_updates` for each participant at the session date |
 | Retried submission | lookup by unique `client_operation_id` before insert |
-| Team attention queue | shared `exception_reasons` + severity order in `app/services/attention.py` |
+| Today check-in relevance | task/exception query + cutoff in `app/services/today.py`; shared exception definitions in `app/services/attention.py` |
 | What did Alice report last week? | `standup_participants` for Alice join sessions in range; updates where `session_id` and (`attributed_to` or `author` = Alice) |
 | How did a task progress? | `task_updates` for task ordered by `created_at`; audit events for status/assignment changes |
 | When was a blocker first raised? | `blockers.created_at`, `reported_session_id`, and the `blocker.created` audit event |

@@ -6,7 +6,7 @@ from pydantic import Field
 
 from app.enums import SessionStatus, TaskStatus
 from app.schemas.common import ORMModel, Page, UserBrief
-from app.schemas.tasks import TaskOut
+from app.schemas.tasks import ActionItemOut, BlockerOut, TaskOut
 
 
 class DailyUpdateIn(ORMModel):
@@ -63,9 +63,20 @@ class AttentionItem(ORMModel):
     origin_session_date: date | None = None
 
 
+class TodayTask(TaskOut):
+    """A task row with the exception context that makes it relevant today."""
+    reasons: list[str] = Field(default_factory=list)
+    open_blockers: list[BlockerOut] = Field(default_factory=list)
+    open_action_items: list[ActionItemOut] = Field(default_factory=list)
+
+
 class TodayOut(ORMModel):
     business_date: date
     session: TodaySession | None
     daily_update: DailyUpdateOut | None
-    attention: Page[AttentionItem]
-    current_work: Page[TaskOut]
+    # Change boundary and its human label ("since the Nov 12 standup").
+    cutoff: datetime | None
+    cutoff_label: str
+    checkin: Page[TodayTask]
+    other_commitments: list[AttentionItem] = Field(default_factory=list)
+    recently_completed: Page[TaskOut]

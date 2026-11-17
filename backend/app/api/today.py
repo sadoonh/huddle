@@ -13,14 +13,18 @@ router = APIRouter(tags=["today"])
 def today(
     db: DB,
     user: CurrentUser,
-    attention_limit: int = Query(default=25, ge=1, le=100),
-    attention_offset: int = Query(default=0, ge=0),
-    work_limit: int = Query(default=6, ge=1, le=20),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    q: str | None = None,
+    assignee_id: str | None = None,
+    recent_limit: int = Query(default=10, ge=1, le=25),
 ):
     return build_today(
         db,
         user,
-        attention_limit=attention_limit,
-        attention_offset=attention_offset,
-        work_limit=work_limit,
+        limit=limit,
+        offset=offset,
+        q=q,
+        assignee_id=assignee_id,
+        recent_limit=recent_limit,
     )

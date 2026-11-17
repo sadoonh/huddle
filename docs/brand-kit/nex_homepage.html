@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light" />
+  <title>nex — Tools</title>
+  <meta name="description" content="nex — A focused home for analytics tools." />
+  <meta name="theme-color" content="#292D34" />
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700;750&family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
+
+    :root {
+      /* nex / Charcoal Neutral v1.2 — shared design tokens (see nex_brand_palette.css) */
+      --charcoal: #292D34;
+      --charcoal-raised: #363B43;
+      --charcoal-border: #454B53;
+      --teal: #38D9C5;
+      --teal-hover: #5CE5D3;
+      --teal-deep: #087F77;
+      --page: #F6F7F8;
+      --surface: #FFFFFF;
+      --ink: #252A31;
+      --muted: #66717C;
+      --line: #E1E5E9;
+      --accent: var(--teal-deep);
+      --display: 'Manrope', 'DM Sans', system-ui, sans-serif;
+      --font: 'DM Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+      --logo-font: 'Space Grotesk', 'Manrope', system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      font-family: var(--font);
+      color: var(--ink);
+      background: var(--page);
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, input:focus-visible, a:focus-visible {
+      outline: 3px solid rgba(8, 127, 119, .30);
+      outline-offset: 3px;
+    }
+
+    /* Charcoal brand header; no additional hero or marketing banner. */
+    .topbar {
+      height: 90px;
+      background: linear-gradient(105deg, var(--charcoal) 5%, var(--charcoal-raised) 100%);
+      border-bottom: 1px solid var(--charcoal-border);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      isolation: isolate;
+      overflow: hidden;
+      box-shadow: 0 3px 18px rgba(41, 45, 52, .08);
+    }
+    .topbar::before {
+      content: '';
+      position: absolute;
+      z-index: -1;
+      inset: 0;
+      background: radial-gradient(ellipse 310px 100px at 87% -18%, rgba(56,217,197,.06), transparent 76%);
+      pointer-events: none;
+    }
+    .topbar::after {
+      content: '';
+      position: absolute;
+      z-index: -1;
+      width: 330px;
+      height: 330px;
+      top: -278px;
+      right: clamp(10px, 10vw, 195px);
+      border: 1px solid rgba(132,228,213,.08);
+      border-radius: 50%;
+      pointer-events: none;
+    }
+    .topbar-inner {
+      width: 100%;
+      height: 100%;
+      padding: 0 26px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+    .brand { display: flex; align-items: center; white-space: nowrap; text-decoration: none; }
+    .brand-name {
+      display: inline-flex;
+      align-items: baseline;
+      font-family: var(--logo-font);
+      font-size: 48px;
+      font-weight: 700;
+      line-height: 1;
+      letter-spacing: -.087em;
+      color: #FFFFFF;
+      padding-right: .08em;
+      text-decoration: none;
+      user-select: none;
+    }
+    .brand-name .brand-x {
+      color: var(--teal);
+      transition: color .22s ease, text-shadow .22s ease;
+    }
+    .brand:hover .brand-x { color: var(--teal-hover); text-shadow: 0 0 18px rgba(56,217,197,.18); }
+    .container { max-width: 1272px; padding: 0 30px; margin: 0 auto; }
+    .catalog { padding-top: 67px; }
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 24px;
+      margin-bottom: 26px;
+    }
+    .section-head h1 {
+      font: 800 27px/1.3 var(--display);
+      letter-spacing: -1.15px;
+      margin: 0 0 7px;
+    }
+    .section-head p { margin: 0; color: var(--muted); font-size: 13px; }
+    .search-box { position: relative; width: min(100%, 336px); flex: 0 1 336px; }
+    .search-box > svg {
+      position: absolute;
+      left: 15px;
+      top: 50%;
+      width: 18px;
+      height: 18px;
+      color: #87919B;
+      transform: translateY(-50%);
+      pointer-events: none;
+    }
+    .search-box input {
+      width: 100%;
+      height: 44px;
+      border: 1px solid #DEE3E7;
+      border-radius: 11px;
+      background: #fff;
+      padding: 0 51px 0 42px;
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 500;
+      box-shadow: 0 1px 2px rgba(41,45,52,.020);
+      transition: border-color .2s, box-shadow .2s;
+    }
+    .search-box input:focus { outline: none; border-color: #47B5AA; box-shadow: 0 0 0 4px rgba(56,217,197,.10); }
+    .search-box input::placeholder { color: #939CA6; }
+    .keycap {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      display: grid;
+      place-items: center;
+      height: 21px;
+      min-width: 22px;
+      padding: 1px 6px;
+      border: 1px solid #E1E5E9;
+      border-radius: 5px;
+      background: #F8F9FA;
+      font-size: 11px;
+      font-weight: 750;
+      color: #84909A;
+      pointer-events: none;
+    }
+
+    /* Original compact three-column card proportions, on a neutral canvas. */
+    .tools-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 17px;
+      align-items: stretch;
+    }
+    .tool-card {
+      appearance: none;
+      width: 100%;
+      min-height: 204px;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      border: 1px solid #E1E5E9;
+      border-radius: 16px;
+      padding: 22px 23px 19px;
+      background: #fff;
+      color: inherit;
+      text-align: left;
+      box-shadow: 0 2px 3px rgba(41,45,52,.018);
+      transition: transform .24s cubic-bezier(.22,.61,.36,1), box-shadow .24s, border-color .24s;
+      animation: cardEnter .43s ease both;
+    }
+    .tool-card:hover {
+      transform: translateY(-3px);
+      border-color: #B1DCD6;
+      box-shadow: 0 14px 28px rgba(41,45,52,.08);
+    }
+    .tool-card:focus-visible { border-color: var(--accent); }
+    .tool-icon {
+      width: 45px;
+      height: 45px;
+      display: grid;
+      place-items: center;
+      flex: none;
+      border-radius: 12px;
+      margin-bottom: 18px;
+      transition: transform .26s ease;
+    }
+    .tool-card:hover .tool-icon { transform: translateY(-2px); }
+    .tool-icon svg { width: 22px; height: 22px; stroke-width: 1.9; }
+    .tool-card h2 {
+      margin: 0 0 7px;
+      font: 800 15px/1.35 var(--display);
+      letter-spacing: -.32px;
+    }
+    .tool-card p {
+      margin: 0;
+      max-width: 300px;
+      color: #697683;
+      font-size: 12.5px;
+      font-weight: 450;
+      line-height: 1.55;
+    }
+    .card-arrow {
+      margin-top: auto;
+      padding-top: 22px;
+      align-self: flex-end;
+      color: #919CA8;
+      display: flex;
+      transition: transform .2s, color .2s;
+    }
+    .card-arrow svg { width: 17px; height: 17px; }
+    .tool-card:hover .card-arrow, .tool-card:focus-visible .card-arrow {
+      transform: translate(2px, -2px);
+      color: var(--accent);
+    }
+    .empty-state {
+      grid-column: 1/-1;
+      min-height: 204px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      padding: 28px;
+      text-align: center;
+      background: white;
+      border: 1px dashed #D5DBE0;
+      border-radius: 16px;
+    }
+    .empty-state h2 { font-size: 15px; margin: 0 0 5px; }
+    .empty-state p { margin: 0; color: #697683; font-size: 13px; }
+    .bottom {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin: 49px 0 44px;
+      padding-top: 22px;
+      border-top: 1px solid #E1E5E9;
+      color: #89939E;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    /* Demo-only details: cards can instead navigate directly when their URL is configured. */
+    .overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      display: flex;
+      justify-content: flex-end;
+      background: rgba(19,27,34,.42);
+      opacity: 0;
+      pointer-events: none;
+      backdrop-filter: blur(3px);
+      transition: opacity .22s;
+    }
+    .overlay.show { opacity: 1; pointer-events: auto; }
+    .detail-panel {
+      position: relative;
+      width: min(100%, 440px);
+      height: 100%;
+      padding: 36px;
+      background: #fff;
+      box-shadow: -18px 0 55px rgba(22,31,40,.12);
+      transform: translateX(25px);
+      transition: transform .24s ease;
+      display: flex;
+      flex-direction: column;
+    }
+    .overlay.show .detail-panel { transform: translateX(0); }
+    .detail-close {
+      position: absolute;
+      top: 25px;
+      right: 25px;
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border: 1px solid #E1E5E9;
+      border-radius: 9px;
+      background: #fff;
+      color: #626E79;
+    }
+    .detail-close svg { width: 18px; height: 18px; }
+    .panel-eyebrow { margin-top: 86px; color: #73818B; font-size: 11px; font-weight: 800; letter-spacing: 1.7px; text-transform: uppercase; }
+    .panel-icon { width: 58px; height: 58px; display: grid; place-items: center; margin: 25px 0 20px; border-radius: 16px; }
+    .panel-icon svg { width: 28px; height: 28px; }
+    .detail-panel h2 { margin: 0 0 10px; font: 800 27px/1.35 var(--display); letter-spacing: -1px; }
+    .panel-desc { margin: 0; color: #66717C; font-size: 14px; line-height: 1.8; }
+    .panel-separator { height: 1px; background: #E1E5E9; margin: 30px 0 26px; }
+    .panel-note { color: #66717C; font-size: 12px; line-height: 1.65; background: #F6F7F8; border: 1px solid #E1E5E9; border-radius: 11px; padding: 14px; }
+    .panel-note strong { color: #363B43; }
+
+    @keyframes cardEnter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @media (max-width: 980px) { .tools-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 680px) {
+      .topbar { height: 76px; }
+      .brand-name { font-size: 40px; }
+      .topbar-inner { padding-left: 16px; padding-right: 16px; }
+      .container { padding-left: 19px; padding-right: 19px; }
+      .catalog { padding-top: 39px; }
+      .section-head { display: block; margin-bottom: 20px; }
+      .section-head h1 { font-size: 24px; }
+      .search-box { margin-top: 20px; max-width: none; width: 100%; }
+      .tools-grid { grid-template-columns: 1fr; gap: 12px; }
+      .tool-card { min-height: 181px; padding: 19px 21px 17px; }
+      .bottom { margin: 32px 0 26px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *,*::before,*::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#catalog-title" aria-label="nex home">
+        <span class="brand-name"><span>ne</span><span class="brand-x">x</span></span>
+      </a>
+
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="catalog" aria-labelledby="catalog-title">
+      <div class="section-head">
+        <div>
+          <h1 id="catalog-title">Explore tools</h1>
+          <p>Everything your team needs, in one place.</p>
+        </div>
+        <label class="search-box" for="search-input">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7.5"/><path d="m16.5 16.5 4.5 4.5"/></svg>
+          <input id="search-input" type="search" placeholder="Search tools..." autocomplete="off" aria-label="Search tools" />
+          <span class="keycap" aria-hidden="true">/</span>
+        </label>
+      </div>
+      <div id="tools-grid" class="tools-grid" aria-live="polite"></div>
+    </section>
+    <footer class="bottom"><span>nex <span style="color:#A5ADB5;padding:0 7px">/</span> analytics tools</span><span>Simple tools. Better flow.</span></footer>
+  </main>
+
+  <div class="overlay" id="overlay" aria-hidden="true">
+    <aside class="detail-panel" role="dialog" aria-modal="true" aria-labelledby="detail-title" tabindex="-1">
+      <button type="button" class="detail-close" id="detail-close" aria-label="Close details"></button>
+      <div class="panel-eyebrow">TOOL OVERVIEW</div>
+      <div class="panel-icon" id="detail-icon"></div>
+      <h2 id="detail-title"></h2>
+      <p class="panel-desc" id="detail-desc"></p>
+      <div class="panel-separator"></div>
+      <p class="panel-note"><strong>Prototype preview.</strong> To launch a tool directly, add its URL to the <code>tools</code> array in this HTML file.</p>
+    </aside>
+  </div>
+
+  <script>
+    (() => {
+      'use strict';
+
+      /* Add each real internal tool URL to launch it directly instead of opening demo details. */
+      const tools = [
+        { id: 'nlq', name: 'NLQ Assistant', desc: 'Ask business questions in everyday language.', icon: 'chat', color: '#087F77', bg: '#E5F6F2', url: '' },
+        { id: 'marimo', name: 'Marimo Hub', desc: 'Build and share interactive Python notebooks.', icon: 'notebook', color: '#576B9F', bg: '#EFF1F8', url: '' },
+        { id: 'powerbi', name: 'Power BI Portal', desc: 'Access dashboards and business reports.', icon: 'chart', color: '#A17C27', bg: '#FAF5E6', url: '' },
+        { id: 'dbt', name: 'dbt Workspace', desc: 'Develop and document transformation models.', icon: 'layers', color: '#BD7156', bg: '#FAF0EC', url: '' },
+        { id: 'sandbox', name: 'Analytics Sandbox', desc: 'Prototype datasets and repeatable analyses.', icon: 'flask', color: '#54866F', bg: '#EDF5EF', url: '' },
+      ];
+
+      const paths = {
+        chat: '<path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5 9 9 0 0 1-4-.9L3 21l1.9-5.2A8.5 8.5 0 1 1 21 11.5Z"/><path d="M8.5 11.5h.01m4 0h.01m4 0h.01" stroke-width="2.8"/>',
+        notebook: '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3v18M12 8h4M12 12h4M12 16h3"/>',
+        chart: '<path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/>',
+        layers: '<path d="m12 2 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 17l9 5 9-5"/>',
+        flask: '<path d="M9 3h6M10 3v7l-6.8 9.2A1.8 1.8 0 0 0 4.7 22h14.6a1.8 1.8 0 0 0 1.5-2.8L14 10V3M8 16h8"/>',
+        arrow: '<path d="M7 17 17 7M8 7h9v9"/>',
+        close: '<path d="M5 5 19 19M19 5 5 19"/>'
+      };
+      const icon = (name) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]}</svg>`;
+      const grid = document.getElementById('tools-grid');
+      const search = document.getElementById('search-input');
+      const overlay = document.getElementById('overlay');
+      const closeButton = document.getElementById('detail-close');
+      let opener = null;
+
+      function render() {
+        const q = search.value.trim().toLowerCase();
+        const visible = tools.filter(t => `${t.name} ${t.desc}`.toLowerCase().includes(q));
+        grid.innerHTML = visible.length
+          ? visible.map((t, index) => `
+              <button type="button" class="tool-card" data-tool="${t.id}" style="animation-delay:${index * 35}ms" aria-label="${t.url ? 'Open' : 'View details for'} ${t.name}">
+                <span class="tool-icon" style="background:${t.bg};color:${t.color}">${icon(t.icon)}</span>
+                <h2>${t.name}</h2>
+                <p>${t.desc}</p>
+                <span class="card-arrow">${icon('arrow')}</span>
+              </button>`).join('')
+          : '<div class="empty-state"><h2>No tools found</h2><p>Try searching for a different term.</p></div>';
+      }
+
+      function openDetails(tool, button) {
+        opener = button;
+        document.getElementById('detail-icon').style.background = tool.bg;
+        document.getElementById('detail-icon').style.color = tool.color;
+        document.getElementById('detail-icon').innerHTML = icon(tool.icon);
+        document.getElementById('detail-title').textContent = tool.name;
+        document.getElementById('detail-desc').textContent = tool.desc;
+        overlay.classList.add('show');
+        overlay.setAttribute('aria-hidden', 'false');
+        document.body.style.overflow = 'hidden';
+        closeButton.focus();
+      }
+      function closeDetails() {
+        overlay.classList.remove('show');
+        overlay.setAttribute('aria-hidden', 'true');
+        document.body.style.overflow = '';
+        if (opener && opener.isConnected) opener.focus();
+      }
+
+      grid.addEventListener('click', event => {
+        const card = event.target.closest('[data-tool]');
+        if (!card) return;
+        const tool = tools.find(t => t.id === card.dataset.tool);
+        if (!tool) return;
+        if (tool.url) { window.open(tool.url, '_blank', 'noopener,noreferrer'); }
+        else openDetails(tool, card);
+      });
+      search.addEventListener('input', render);
+      closeButton.innerHTML = icon('close');
+      closeButton.addEventListener('click', closeDetails);
+      overlay.addEventListener('click', event => { if (event.target === overlay) closeDetails(); });
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && overlay.classList.contains('show')) { event.preventDefault(); closeDetails(); return; }
+        if ((event.key === '/' || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k')) && !overlay.classList.contains('show') && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) { event.preventDefault(); search.focus(); }
+        if (event.key === 'Escape' && document.activeElement === search) { search.value = ''; render(); search.blur(); }
+        if (event.key === 'Tab' && overlay.classList.contains('show')) { event.preventDefault(); closeButton.focus(); }
+      });
+      render();
+    })();
+  </script>
+</body>
+</html>

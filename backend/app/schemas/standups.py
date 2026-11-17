@@ -64,9 +64,13 @@ class SessionDetail(SessionOut):
 
 
 class SessionOutcomes(ORMModel):
+    # Legacy arrays stay in the contract for old links but are always empty in
+    # the active product; `updates`/`blocked_tasks` are the live outcomes.
     action_items: list[ActionItemOut] = Field(default_factory=list)
     unresolved_blockers: list[CarriedItem] = Field(default_factory=list)
     decisions: list[DecisionOut] = Field(default_factory=list)
+    updates: list[TaskUpdateOut] = Field(default_factory=list)
+    blocked_tasks: list[TaskOut] = Field(default_factory=list)
     updates_count: int = 0
     participant_count: int = 0
     reviewed_count: int = 0
@@ -221,5 +225,4 @@ class UserStandupHistory(ORMModel):
 class CarryForwardOut(ORMModel):
     blockers: list[CarriedItem] = Field(default_factory=list)
     action_items: list[CarriedItem] = Field(default_factory=list)
-    at_risk_tasks: list[TaskOut] = Field(default_factory=list)
     overdue_tasks: list[TaskOut] = Field(default_factory=list)

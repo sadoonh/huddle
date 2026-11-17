@@ -1,0 +1,89 @@
+{
+  "$schema": "https://design-tokens.github.io/community-group/format/",
+  "brand": "nex",
+  "version": "1.2",
+  "theme": "Charcoal Neutral",
+  "colors": {
+    "charcoal": {
+      "$type": "color",
+      "$value": "#292D34",
+      "description": "Primary brand header and dark background"
+    },
+    "charcoal-raised": {
+      "$type": "color",
+      "$value": "#363B43",
+      "description": "Header depth and elevated dark surfaces"
+    },
+    "charcoal-border": {
+      "$type": "color",
+      "$value": "#454B53",
+      "description": "Dividers and edges on charcoal"
+    },
+    "signal-teal": {
+      "$type": "color",
+      "$value": "#38D9C5",
+      "description": "Logo x and dark-background highlights"
+    },
+    "signal-teal-hover": {
+      "$type": "color",
+      "$value": "#5CE5D3",
+      "description": "Dark-background logo hover"
+    },
+    "action-teal": {
+      "$type": "color",
+      "$value": "#087F77",
+      "description": "Links and UI focus on white"
+    },
+    "canvas": {
+      "$type": "color",
+      "$value": "#F6F7F8",
+      "description": "Page background"
+    },
+    "surface": {
+      "$type": "color",
+      "$value": "#FFFFFF",
+      "description": "Cards, search and panels"
+    },
+    "ink": {
+      "$type": "color",
+      "$value": "#252A31",
+      "description": "Primary content typography"
+    },
+    "secondary": {
+      "$type": "color",
+      "$value": "#66717C",
+      "description": "Descriptions and helper text"
+    },
+    "border": {
+      "$type": "color",
+      "$value": "#E1E5E9",
+      "description": "Dividers and card borders"
+    },
+    "whisper-teal": {
+      "$type": "color",
+      "$value": "#EAF7F4",
+      "description": "Soft selected states"
+    }
+  },
+  "typography": {
+    "logo": {
+      "family": "Space Grotesk",
+      "weight": 700
+    },
+    "heading": {
+      "family": "Manrope",
+      "weight": 800
+    },
+    "body": {
+      "family": "DM Sans",
+      "weight": 400
+    }
+  },
+  "layout": {
+    "headerHeightDesktop": "90px",
+    "headerPaddingDesktop": "26px",
+    "wordmarkSizeDesktop": "48px",
+    "cardsColumnsDesktop": 3,
+    "cardRadius": "16px"
+  }
+}

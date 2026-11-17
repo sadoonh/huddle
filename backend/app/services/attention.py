@@ -1,7 +1,9 @@
-"""Shared attention ordering for Today and the live workspace.
+"""Shared attention definition for Today and the live workspace.
 
-Keeping one definition avoids the dashboard and meeting screens disagreeing
-about what is blocked, overdue, at risk or carrying a follow-up.
+Active attention is intentionally simple: a task is an exception only when its
+free-text ``blocked_by`` is non-blank. Legacy blocker rows, action items, due
+dates and at-risk flags remain stored/historical but no longer create reasons.
+The legacy ``build_attention`` helper is retained for old callers/records.
 """
 
 from __future__ import annotations
@@ -12,25 +14,33 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.rbac import is_manager
-from app.core.serializers import task_out, user_brief
+from app.core.serializers import user_brief
 from app.enums import ActionItemStatus, BlockerStatus, TaskStatus
 from app.models import ActionItem, Blocker, Task, User, utcnow
-from app.schemas.common import Page
-from app.schemas.tasks import TaskOut
 from app.schemas.today import AttentionIssue, AttentionItem
 
 REASON_SCORE = {
+    "blocked": 100,
     "blocker": 100,
     "overdue": 80,
-    "at_risk": 60,
     "follow_up": 50,
 }
 REASON_LABEL = {
+    "blocked": "Blocked",
     "blocker": "Needs help",
     "overdue": "Overdue",
-    "at_risk": "At risk",
     "follow_up": "Follow-up",
 }
+
+
+def is_blocked_text(task: Task) -> bool:
+    """The active product defines "blocked" as user-entered task text only."""
+    return bool(task.blocked_by and task.blocked_by.strip())
+
+
+def blocked_text_filter():
+    """Portable SQL predicate for a non-blank ``tasks.blocked_by``."""
+    return and_(Task.blocked_by.is_not(None), func.trim(Task.blocked_by) != "")
 
 
 def open_blockers(task: Task) -> list[Blocker]:
@@ -42,16 +52,13 @@ def open_action_items(task: Task) -> list[ActionItem]:
 
 
 def exception_reasons(task: Task) -> list[str]:
-    reasons: list[str] = []
-    if open_blockers(task):
-        reasons.append("blocker")
-    if task.due_date and task.due_date < date.today() and task.status not in TaskStatus.closed_statuses():
-        reasons.append("overdue")
-    if task.is_at_risk:
-        reasons.append("at_risk")
-    if open_action_items(task):
-        reasons.append("follow_up")
-    return reasons
+    """Active attention is free-text only.
+
+    Legacy blocker rows, due dates, at-risk flags, action items and follow-ups
+    are deliberately ignored: they remain stored/historical but no longer drive
+    check-in or workspace attention.
+    """
+    return ["blocked"] if is_blocked_text(task) else []
 
 
 def attention_score(reasons: list[str]) -> int:
@@ -62,7 +69,7 @@ def _age_days(created_at) -> int:
     return max((utcnow().date() - created_at.date()).days, 0)
 
 
-def _task_query():
+def task_query():
     return select(Task).options(
         selectinload(Task.project),
         selectinload(Task.assignee),
@@ -120,7 +127,7 @@ def build_attention(
     tasks = list(
         db.scalars(
             _scope_tasks(
-                _task_query().where(Task.status.notin_(TaskStatus.closed_statuses())),
+                task_query().where(Task.status.notin_(TaskStatus.closed_statuses())),
                 user,
             ).order_by(Task.updated_at.desc())
         )
@@ -161,8 +168,6 @@ def build_attention(
             detail = focus.description
             age = _age_days(focus.created_at)
             origin = focus.session.session_date if focus.session else None
-        elif leading == "at_risk":
-            detail = task.at_risk_reason or "Flagged at risk"
         elif leading == "overdue":
             detail = f"Due {task.due_date.isoformat()}" if task.due_date else None
 
@@ -175,16 +180,6 @@ def build_attention(
                     id=f"{task.id}:overdue",
                     label="Overdue",
                     detail=f"Due {task.due_date.isoformat()}" if task.due_date else None,
-                    owner=user_brief(task.assignee),
-                )
-            )
-        if "at_risk" in reasons:
-            issues.append(
-                AttentionIssue(
-                    kind="reason",
-                    id=f"{task.id}:at_risk",
-                    label="At risk",
-                    detail=task.at_risk_reason or "Flagged at risk",
                     owner=user_brief(task.assignee),
                 )
             )
@@ -310,30 +305,3 @@ def build_attention(
     )
     total = len(items)
     return items[offset : offset + limit], total
-
-
-def build_current_work(db: Session, user: User, *, limit: int = 6) -> Page[TaskOut]:
-    """Short personal current-work preview. Managers get their work in Work."""
-    empty = Page[TaskOut](items=[], total=0, limit=limit, offset=0)
-    if is_manager(user):
-        return empty
-
-    base = _task_query().where(
-        Task.assignee_id == user.id,
-        Task.status.in_([TaskStatus.TODO, TaskStatus.IN_PROGRESS]),
-    )
-    total = db.scalar(select(func.count()).select_from(base.order_by(None).subquery())) or 0
-    rows = (
-        db.scalars(
-            base.order_by(
-                Task.due_date.is_(None),
-                Task.due_date.asc(),
-                Task.updated_at.desc(),
-            ).limit(limit)
-        )
-        .unique()
-        .all()
-    )
-    return Page[TaskOut](
-        items=[task_out(task) for task in rows], total=total, limit=limit, offset=0
-    )

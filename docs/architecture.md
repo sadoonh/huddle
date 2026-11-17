@@ -6,12 +6,12 @@ The application is an internal tool for a small analytics team. It must feel lik
 
 The daily product is deliberately small:
 
-- **Today** — what needs attention, a short personal work preview, and one optional update composer.
-- **Work** — a searchable task list with shared task detail; not a planning suite.
-- **Focused standup** — a navigation-free meeting mode entered from Today, with a compact person selector and contextual capture drawer.
-- **Outcomes** — actions, unresolved help and decisions, with bookkeeping collapsed.
+- **Tasks** — one task workspace with Board and Table presentations, a unified To Do category (backlog + todo), public task IDs, inline status/owner edits and a shared update dialog.
+- **Brand** — extends the nex Charcoal Neutral v1.2 system (`docs/brand-kit/`): charcoal header, Action Teal on white, Signal Teal on charcoal, Manrope/DM Sans. Legacy utility palettes are remapped in `frontend/tailwind.config.js` so older pages inherit the theme.
+- **Projects** — task context rather than a destination: a project filter on Tasks plus a small manager-only create dialog. Project data, memberships and authorized counts remain; the old Projects page/detail surface is retired. Includes the idempotently provisioned **Ad hoc** project.
+- **Standup** — a navigation-free manager view entered from the single Tasks **Standup** button; a compact person selector, To Do/In Progress/Blocked groups, and direct return to Tasks. No past-standup history or outcomes page is exposed.
 
-Intake, transcript review, project settings and the legacy board are pilot/contextual tools. Primary navigation has two destinations.
+Work intake, transcript review, past-standup history and the legacy board are retired from the active product; their historical records are retained. Primary navigation has one destination, Tasks, plus a manager Standup button. The navigation bar remains in place for future pages; project context is handled inside Tasks.
 
 Constraints from the brief:
 
@@ -20,14 +20,14 @@ Constraints from the brief:
 - Serverless compute on existing AWS infrastructure, Terraform, GitHub Actions.
 - Reuse nex authentication; application-level RBAC.
 - Modular monolith; no Kubernetes, microservices, vector DB or workflow engine.
-- AI is asynchronous, proposal-based and human-approved.
+- AI transcript processing is retired; retained AI records remain audit-only.
 
 ## 2. Component view
 
 ```mermaid
 flowchart TB
   subgraph Browser
-    SPA[React SPA<br/>Today · Work · focused meeting]
+    SPA[React SPA<br/>Tasks · Project filter · Standup]
   end
   subgraph nex
     Portal[nex portal<br/>SSO + hosting]
@@ -35,7 +35,7 @@ flowchart TB
   subgraph AWS
     APIGW[API Gateway HTTP API]
     API[FastAPI Lambda<br/>modular monolith]
-    Worker[Transcript worker Lambda]
+    Worker[Retained worker Lambda<br/>queue disabled]
     PG[(RDS PostgreSQL)]
     S3[(S3 transcripts)]
     SQS[(SQS + DLQ)]
@@ -46,10 +46,9 @@ flowchart TB
   SPA -->|/api/v1/*| APIGW --> API
   API --> PG
   API --> S3
-  API --> SQS --> Worker
-  Worker --> PG
-  Worker --> S3
-  Worker --> Bedrock
+  API -. retained records .-> S3
+  SQS -. event source disabled .-> Worker
+  Bedrock -. retired extraction .-> Worker
   API --> CW
   Worker --> CW
 ```
@@ -71,11 +70,11 @@ Routers are thin. Services receive `(db, user, payload)` and either return ORM/s
 
 ### Interaction shell and overlays
 
-The app uses a compact header (brand, Today, Work, account) rather than a persistent sidebar. Pilot tools are compiled out of normal production builds unless `VITE_ENABLE_PILOT=true`; development identity controls only appear when `AUTH_MODE=dev`.
+The app uses a compact charcoal header (brand, Tasks nav slot, account menu) rather than a persistent sidebar. Retired product surfaces have no build flag or hidden navigation. Local development has a fixed dev identity; production identity comes from nex SSO.
 
 `Modal` and `Drawer` share one portal-based behavior: labelled dialog, initial focus, trapped focus, inert background, body scroll lock, topmost-only Escape, and focus restoration. Confirmations use the same primitive, so a nested discard prompt consumes Escape instead of closing the underlying task.
 
-Work keeps its search, filters, pagination and selected task in the URL. Today, Work and the meeting share one task detail surface and one capability model.
+Tasks keeps layout, search, project/owner/status filters, sort, page and selected task in the URL. Board, Table and the standup view share one task/update surface and one capability model.
 
 ### Transaction model
 
@@ -98,7 +97,7 @@ Services only `flush()`. Consequences:
 - A progress update and an optional status change commit in one transaction; a stale version rolls back both.
 - Multi-row operations (creating a session and its participants, applying a proposal and recording audit) are atomic.
 - Create/update commands accept a unique `client_operation_id`. Reusing it for the same logical submission returns the original row instead of duplicating progress, tasks, help requests, follow-ups, decisions or notes.
-- AI conflict handling is the one deliberate exception: when an apply fails with a conflict, the service marks the proposal `failed`, commits that state, and then raises `409`. This preserves the failure for the reviewer instead of rolling it back.
+- The retired AI apply path kept its conflict record (`proposal.failed`) in a separate commit; retained history still shows the failure reason.
 
 ### SQLite / PostgreSQL portability
 
@@ -128,7 +127,7 @@ In `nex` mode the first request for an unknown identity provisions a user as an 
 RBAC is applied in `core/rbac.py`:
 
 - **Employee** — read own tasks/projects they belong to; update own task status; add own updates; submit own pre-meeting note.
-- **Manager** — all read; manage projects/tasks; facilitate sessions; review participants; capture meeting records; approve/apply AI proposals.
+- **Manager** — all read; manage projects/tasks; facilitate sessions; review participants; capture meeting records.
 - **Admin** — manager plus user/role management.
 
 Project visibility also considers ownership and `project_members`. Task visibility considers manager/admin, assignee, creator and project owner. The checks run in services, not only in routers, so every entry point is protected.
@@ -137,7 +136,7 @@ Project visibility also considers ownership and `project_members`. Task visibili
 
 ### 5.0 Daily updates and durable help
 
-Today writes two kinds of input without requiring a meeting:
+The standup view and task update dialog write through the same session/task services:
 
 - **Daily update** — one optional `daily_updates` row per user per day. `PUT /daily-updates/today` upserts, so retries update rather than duplicate. The meeting workspace reads the participant's update for the session date, and session detail exposes it under participant reporting.
 - **Help request** — “Needs help” creates a Blocker, task-linked or team-wide. Employees may create either (with project visibility enforced). It is durable and carries forward; it is not stored only as participant text.
@@ -157,14 +156,16 @@ draft ──start──▶ in_progress ──complete──▶ completed
 
 ### 5.2 Shared attention ordering
 
-`app/services/attention.py` defines one exception vocabulary and severity order used by both Today and the meeting workspace:
+`app/services/attention.py` defines the shared exception vocabulary used by the standup workspace and the retained `/today` projection:
 
 1. open blocker / help request — 100
 2. overdue — 80
 3. explicitly at risk — 60
 4. open follow-up — 50
 
-A task is returned once with all applicable reasons; the leading reason drives the row label and the rest are disclosed as additional issues. Taskless blockers/follow-ups and blockers on closed tasks get their own rows so deduplication cannot hide them. `/today` paginates the full set used by the dashboard; the workspace uses the same classifier for its needs/active/other groups.
+Task cards expose priority in the top-right; the Table has a dedicated Priority column; the update dialog keeps Status, Owner and Priority together above Save update.
+
+The standup view groups one participant’s work into To Do (todo + backlog), In Progress and Blocked, then Done collapsed. The expanded Done list uses the same card treatment as the other groups. Rows do not repeat owner/status (the selected participant and group already carry that context), and no separate “Current work” heading is shown. `/today` remains a server projection used for session state; there is no Today page or second task store.
 
 ### 5.3 Carry-forward
 
@@ -179,66 +180,31 @@ They keep their `reported_session_id` / `session_id` origin, so history can answ
 
 ### 5.4 Focused meeting and capture context
 
-The meeting route (`/standups/:id/live`) is rendered outside the global layout. The UI has one main workspace, a compact person selector with a roster dialog, one review count and one Finish action. Capture is a contextual drawer rather than a permanent tabbed column:
+The meeting route (`/standups/:id/live`) is rendered outside the global layout. The UI has one main workspace, a compact person selector with the session status/review count inline, one review action and one Finish action. Capture opens the shared task update dialog:
 
 - `POST /standups/sessions/{id}/updates` creates an append-only `TaskUpdate` with `source=standup`, `session_id`, author = manager, `attributed_to_user_id` = selected employee.
 - blockers/action items/decisions inherit `session_id`. Owners are explicitly selected where relevant; the UI does not silently infer who can resolve a blocker.
 - Notes are stored as `session_notes`.
 - Every capture writes an audit event with `source=manager_action` and the session id.
-- Switching participants while a draft exists prompts before discarding it; “Mark reviewed & next” marks only the current participant and advances. Accidental reviews can be undone from the roster.
+- Switching participants while a draft exists prompts before discarding it; “Mark reviewed & next” marks only the current participant and advances. There is no roster panel.
 - Capture freezes the task version when the draft opens. Background workspace refreshes cannot silently move the expected version; conflicts require **Load latest state** and a deliberate re-save.
 - SPA Back while a draft is open uses a same-URL history guard and the in-app discard confirmation.
 
-### 5.5 Outcome-first history
+### 5.5 Session completion
 
-The session page leads with Next actions, Unresolved help needed and Decisions from `GET .../outcomes`. Progress records, captured notes, participant reporting (including daily updates), facts/notes and audit are one lazy-loaded **Meeting details** region. The stored deterministic summary remains in that region. Taskless help requests can be resolved from outcomes when permitted, and actions/decisions link to their tasks. Outcomes distinguish “recorded in this meeting” from “still open now”; finishing never closes commitments.
+Finishing the standup returns directly to Tasks. No outcomes/history page is reachable; the underlying session, updates, decisions and notes remain retained in the database and audit.
 
 ## 6. Date semantics
 
-The API defines the team business day as the server's UTC date and exposes it at `GET /meta` (also on `/today`). The SPA uses that date for due/overdue and daily-update context. Timestamps remain UTC and are rendered in the browser's local time. Closed tasks with historical due dates show a date, not “overdue”. Standup cards include the year when it differs from the current year; history is date-filterable.
+The API defines the team business day as the server's UTC date and exposes it at `GET /meta` (also on `/today`). The SPA uses that date for due/overdue and daily-update context. Timestamps remain UTC and are rendered in the browser's local time. Closed tasks with historical due dates show a date, not “overdue”.
 
-## 7. AI reconciliation pipeline
+## 7. Retained transcript data (processing retired)
 
-```mermaid
-sequenceDiagram
-  participant M as Manager
-  participant API as FastAPI
-  participant S3 as S3
-  participant Q as SQS
-  participant W as Worker
-  participant B as Bedrock
-  participant DB as PostgreSQL
-  M->>API: upload transcript + session
-  API->>S3: store file
-  API->>DB: transcript row (uploaded)
-  API->>Q: enqueue transcript id
-  API-->>M: 201 (uploaded)
-  W->>Q: receive
-  W->>DB: context (tasks, blockers, session records)
-  W->>B: transcript + context
-  B-->>W: structured operations
-  W->>DB: proposals (pending) + audit
-  M->>API: approve / edit / reject
-  M->>API: apply approved proposal
-  API->>DB: version check → mutation + audit
-```
-
-### Safeguards
-
-| Risk | Mechanism |
-|---|---|
-| AI mutating records silently | Proposals only; `apply` requires `status=approved` |
-| Duplicate records | Token-Jaccard similarity against session updates/blockers/actions/decisions; `duplicate_of_type/id` shown to reviewer |
-| Wrong task | Lexical matching + supplied context; weak/ambiguous matches set `is_ambiguous=true` and often `target_id=null` |
-| Concurrent changes | `base_task_version` captured at generation; apply compares to `Task.version`, fails with `409`, preserves newer data, marks proposal failed |
-| Lost approvals | Reviewer, timestamps, note and audit events (`generated`, `edited`, `approved`, `rejected`, `applied`, `failed`) |
-| Model/provider failure | Transcript marked `failed` with error; retry/reprocess endpoint; SQS DLQ after 3 receives |
-
-The mock extractor exists for deterministic tests and offline demos. It is intentionally not presented as production-quality extraction; the Bedrock adapter is the production path.
+Transcript review/upload, proposal review and AI proposal application have been removed from the active UI, API and navigation. The database models, historical transcripts/proposals and audit records are retained under the data-retention policy. The SQS event source mapping is disabled by default in Terraform (`transcripts_processing_enabled = false`), and `app.worker.handler` ignores queued messages without deleting them. Removing the retained S3/SQS/Lambda resources is a separate operation requiring explicit approval.
 
 ## 8. Concurrency and consistency
 
-- **Task edits** accept `expected_version`. Mismatch → `409` with `current_version` and `expected_version`. Human UIs use this in the board/task editor; AI apply always enforces it.
+- **Task edits** accept `expected_version`. Mismatch → `409` with `current_version` and `expected_version`. Human UIs use this in the board/table/update dialog and standup view; retained AI apply records also enforced it.
 - **Session date** is unique, so a duplicate create returns `409` with the existing session id.
 - **Review/complete** checks are explicit: completing with unreviewed participants requires `force=true`; the response lists who is unreviewed.
 - **No distributed locks.** A small team and optimistic checks are sufficient for the MVP. Real-time multi-manager synchronisation is deferred.
@@ -255,13 +221,13 @@ The mock extractor exists for deterministic tests and offline demos. It is inten
 | DB integrity race | `409` via `IntegrityError` handler |
 | Unexpected DB error | `500` JSON; no partial commit |
 | Transcript extraction error | transcript `failed`, error stored, audit event; job retried/DLQ |
-| AI apply conflict | proposal `failed`, failure reason, task untouched, `409` to caller |
+| Legacy AI apply conflict (retained) | proposal `failed`, failure reason, task untouched |
 
 ## 10. Performance and scaling notes
 
 - Standup reads are bounded by team size and use `selectinload` for task relationships.
 - Aggregates (per-session open counts, per-participant blocker/action counts) are done with grouped queries, not N+1 loops.
-- Lambda → RDS connections are the main scaling constraint. The API Lambda is small; RDS Proxy or reserved concurrency should be added before a large rollout. Worker concurrency is capped at 2 in Terraform.
+- Lambda → RDS connections are the main scaling constraint. The API Lambda is small; RDS Proxy or reserved concurrency should be added before a large rollout. The retained worker’s event source is disabled by default; its concurrency cap remains in Terraform for a future approved use.
 - Static frontend assets are served by nex/nginx, not Lambda.
 - The database holds all operational history; no separate search infrastructure is needed at this scale.
 

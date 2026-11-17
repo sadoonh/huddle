@@ -1,5 +1,7 @@
 # API reference
 
+> **Active surface:** users, projects, tasks, blockers/action items/decisions, standups, today, daily updates, audit and meta. `GET/POST /ai/*` and `GET/POST /intake/*` are **no longer registered**; their sections below are retained only to describe historical data and audit. Board/table are client presentations over `/tasks`; there is no separate board endpoint.
+
 Base path: `/api/v1` (configurable via `API_PREFIX`). Interactive OpenAPI: `/api/docs`, schema: `/api/openapi.json`. Health endpoints live outside the prefix: `/health`, `/health/ready`. `GET /meta` returns the server `business_date` (UTC team day) used by the UI for due/overdue labels.
 
 ## 1. Conventions
@@ -75,73 +77,68 @@ List endpoints that paginate return:
 
 ---
 
-## 2.5 Today and daily updates
+## 2.5 Today session state and daily updates
+
+`/today` still provides session state and a check-in projection; the SPA has no Today page and uses it for the Tasks standup button. Daily updates are retained.
 
 | Method | Path | Role | Notes |
 |---|---|---|---|
-| GET | `/today` | any authenticated | session state, server-ordered attention page, current-work preview, today's daily update |
-| GET | `/daily-updates/today` | any authenticated | current user's daily update or `null` |
-| PUT | `/daily-updates/today` | any authenticated | upsert one daily update per user per day |
+| GET | `/today` | any authenticated | session state, paginated check-in, secondary commitments, recently completed work, general note |
+| GET | `/daily-updates/today` | any authenticated | current user's general note or `null` |
+| PUT | `/daily-updates/today` | any authenticated | upsert one general note per user per day |
 
 `GET /today` parameters:
 
 | Parameter | Default | Notes |
 |---|---|---|
-| `attention_limit` | 25 | 1–100 |
-| `attention_offset` | 0 | paginate the full attention set |
-| `work_limit` | 6 | employee current-work preview; ignored for managers |
+| `limit` | 25 | 1–100 check-in task rows |
+| `offset` | 0 | paginate the full relevant set |
+| `q` | — | task-title search |
+| `assignee_id` | — | manager owner filter; ignored for employees (always assigned-only) |
+| `recent_limit` | 10 | recently completed tasks, 1–25 |
 
-Attention items are deduplicated: a task with a blocker, overdue date, at-risk flag and open follow-up appears **once** with `reasons: ["blocker","overdue","at_risk","follow_up"]` and one `reason` leading. Taskless blockers/follow-ups and blockers on closed tasks get their own `kind: "blocker"` / `"action_item"` rows, so nothing is hidden.
+Relevance is computed server-side: nonclosed tasks with open blockers, overdue dates, explicit risk or open follow-ups; in-progress tasks; to-dos due within the 7-day horizon or created since the cutoff; no full backlog. The cutoff is the previous completed standup’s `ended_at`, else the start of the business day, and is returned as `cutoff` plus a human `cutoff_label`. `recently_completed` contains done tasks whose `completed_at` is at/after the cutoff. Taskless blockers/follow-ups and commitments on closed tasks that are not represented by a check-in row appear in `other_commitments`.
 
 ```json
 {
   "business_date": "2026-11-13",
   "session": {"id": "...", "status": "draft", "reviewed_count": 0, "participant_count": 4},
-  "daily_update": {"progress": "Dashboard validation is complete.", "next_steps": null},
-  "attention": {
-    "items": [
-      {
-        "kind": "task",
-        "kind": "task",
-        "id": "...",
-        "task_id": "...",
-        "focus_id": "blocker-id",
-        "title": "Attribution model v2",
-        "detail": "Warehouse access missing for the marketing schema.",
-        "owner": {"id": "...", "full_name": "Jordan Lee", "role": "employee"},
-        "reporter": {"id": "...", "full_name": "Maya Chen", "role": "manager"},
-        "reason": "blocker",
-        "reasons": ["blocker", "at_risk", "follow_up"],
-        "issues": [
-          {"kind": "blocker", "id": "blocker-id", "label": "Help request", "detail": "Warehouse access missing..."},
-          {"kind": "action_item", "id": "action-id", "label": "Follow-up", "detail": "Jordan to request access"}
-        ],
-        "due_date": "2026-11-17",
-        "age_days": 3,
-        "task_status": "in_progress",
-        "open_blocker_count": 1,
-        "open_action_item_count": 1,
-        "origin_session_date": "2026-11-10"
-      }
-    ],
-    "total": 5,
-    "limit": 25,
-    "offset": 0
+  "daily_update": {"progress": "Optional general note.", "next_steps": null},
+  "cutoff": "2026-11-12T16:04:00",
+  "cutoff_label": "Since the Nov 12 standup",
+  "checkin": {
+    "items": [{
+      "id": "...",
+      "title": "Attribution model v2",
+      "project_name": "Marketing Attribution",
+      "status": "in_progress",
+      "assignee": {"id": "...", "full_name": "Priya Patel"},
+      "due_date": "2026-11-17",
+      "reasons": ["blocker", "at_risk", "follow_up"],
+      "open_blockers": [{"id": "...", "description": "Warehouse access missing", "owner": null, "reported_by": {"full_name": "Maya Chen"}}],
+      "open_action_items": [{"id": "...", "description": "Jordan to request access", "status": "open"}],
+      "latest_update": {"progress": "Specification drafted", "created_at": "..."},
+      "can_move": true
+    }],
+    "total": 13, "limit": 25, "offset": 0
   },
-  "current_work": {"items": [], "total": 0, "limit": 6, "offset": 0}
+  "other_commitments": [
+    {"kind": "blocker", "id": "...", "task_id": null, "title": "Team blocker", "detail": "Need design review", "owner": null, "reporter": {"full_name": "Maya Chen"}, "age_days": 0}
+  ],
+  "recently_completed": {"items": [], "total": 0, "limit": 10, "offset": 0}
 }
 ```
 
-Ordering is: blockers → overdue → at risk → follow-ups, with due date/age/title as tie-breakers. Managers see team attention and no personal current-work preview; employees see their own tasks plus help/follow-ups they own or reported.
+A task appears once; `reasons` describe all its exceptions. Task owner (`assignee`) and help/follow-up owner are distinct fields. Inline note+status saves use `POST /tasks/{id}/updates`; no standup-submission endpoint exists.
 
-### Daily update
+### Daily general note
 
 ```http
 PUT /api/v1/daily-updates/today
-{ "progress": "Dashboard validation is complete.", "next_steps": "Publish tomorrow." }
+{ "progress": "Optional context for the standup.", "next_steps": "Publish tomorrow." }
 ```
 
-One row per user/date; repeating the call updates the same row and records `daily_update.updated` audit. The meeting workspace includes the participant's daily update even if no session existed when it was written.
+One row per user/date; repeating the call updates the same row and records `daily_update.updated` audit. It never overwrites task progress updates.
 
 ---
 
@@ -149,10 +146,12 @@ One row per user/date; repeating the call updates the same row and records `dail
 
 | Method | Path | Role | Notes |
 |---|---|---|---|
-| GET | `/projects?include_archived=false` | any | employee sees owned/joined projects |
-| POST | `/projects` | manager | `name`, `description`, `owner_id`, `status`, `member_ids` |
-| GET | `/projects/{id}` | member/manager/admin | includes owner, members, task counts |
-| PATCH | `/projects/{id}` | owner/manager/admin | membership changes are manager-only |
+| GET | `/projects?include_archived=false&q=` | any | employee sees owned/joined projects; includes the system Ad hoc project |
+| POST | `/projects` | manager | `name`, `description`, `owner_id`, `status`, `member_ids`; “Ad hoc” is rejected |
+| GET | `/projects/{id}` | member/manager/admin | owner, members, viewer-scoped task counts, `can_edit` |
+| PATCH | `/projects/{id}` | owner/manager/admin | membership changes are manager-only; Ad hoc cannot be archived |
+
+`ProjectOut` adds `system_key` (`"ad_hoc"` for the designated default) and `can_edit`. Task counts are scoped to tasks the viewer may see. The Ad hoc project is provisioned idempotently (stable key; one-time adoption of a single legacy name match; duplicates require deliberate reconciliation) and reconciles active users as members.
 
 ---
 
@@ -166,12 +165,22 @@ One row per user/date; repeating the call updates the same row and records `dail
 | PATCH | `/tasks/{id}` | assignee/creator/manager | supports `expected_version` |
 | PATCH | `/tasks/{id}/status` | assignee/manager | `{status, expected_version?}` |
 | GET | `/tasks/{id}/updates` | visible | newest first |
-| POST | `/tasks/{id}/updates` | assignee/manager | append-only update; optional atomic status change, expected version and `client_operation_id` |
+| POST | `/tasks/{id}/updates` | assignee/manager | create update; optional atomic status change, expected version and `client_operation_id` |
+| PATCH | `/tasks/{id}/updates/{update_id}` | author or manager/admin | edit historic progress text; `expected_version` task version |
+| DELETE | `/tasks/{id}/updates/{update_id}` | author or manager/admin | delete historic update; optional `expected_version` query; `204` |
 | POST | `/tasks/{id}/blockers` | assignee/manager | creates an open blocker; status unchanged |
 | GET | `/tasks/{id}/activity` | visible | audit events for the task + related blockers/actions/decisions |
 | GET | `/tasks/{id}/history` | visible | progress updates (alias for the updates view) |
 
-Task filters: `project_id`, `assignee_id`, repeated `status`, `priority`, `blocked=true`, `overdue=true`, `q` (title substring), `limit`, `offset`.
+Task filters: `project_id`, `assignee_id` (use `unassigned` for tasks with no assignee), repeated `status`, `priority`, `blocked=true`, `overdue=true`, `q` (title substring), `sort`, `limit`, `offset`.
+
+`sort` supports `due` (default), `title`, `owner`, `status`, `updated`, optionally prefixed with `-` for descending. Sorting applies to the entire filtered set with a stable `id` tie-breaker; undated tasks always sort last. Board lanes use the default due ordering; Table passes the chosen sort.
+
+`TaskCreate.description`, when supplied, is stored on the task and also appended as the creator's first task update in the same transaction, so it appears in Latest update and task history immediately.
+
+The SPA groups stored `backlog` and `todo` records under one **To Do** lane/status. The API still accepts both status values; new tasks use `todo`.
+
+Task lists are ordered by `due_date` (undated last), then `updated_at` descending, then `id` ascending, so offset paging is stable when a card changes lane. `TaskOut.can_move` is computed from the same capability check as `PATCH /tasks/{id}` (manager, assignee, or creator) so clients can hide move affordances for read-only work.
 
 ### Atomic update + retry safety
 
@@ -188,6 +197,12 @@ Task filters: `project_id`, `assignee_id`, repeated `status`, `priority`, `block
 ```
 
 The progress row and optional status change commit in one transaction. A stale `expected_version` returns `409` and writes neither. Repeating the call with the same `client_operation_id` returns the original update instead of creating a duplicate. Create endpoints (`POST /tasks`, `/blockers`, `/action-items`, `/decisions`, session `/notes`) accept the same retry id.
+
+### Editing and deleting historic updates
+
+`PATCH /tasks/{id}/updates/{update_id}` requires `progress` (trimmed nonblank) and accepts optional `next_steps` and `expected_version` (the task version). Omitted `next_steps` is preserved; explicit `null`/blank clears it. `DELETE` accepts optional `expected_version` as a query parameter and returns `204`.
+
+Update lookup is scoped to the task, so a missing or mismatched update id returns `404`. The task must remain visible; only the recorded `author_id` or a manager/admin may edit/delete. `attributed_to_user_id` is attribution, not authorship. Mutations bump `Task.version`/`updated_at`; stale versions return `409` with `current_version`/`expected_version`. Task status, owner, priority, blockers and the update's author, attribution, session, source and `created_at` are preserved. Audit records `task.update_edited`/`task.update_deleted` under the task, retaining prior values and the original session id.
 
 ### Task lifecycle
 
@@ -238,16 +253,16 @@ Resolving a blocker preserves task status and records `resolved_at`, `resolved_b
 
 ---
 
-## 6. Standups
+## 6. Standups (active session only)
+
+> Past-standup list, summary, captures, outcomes, timeline, user history and carry-forward endpoints are removed. Session, workspace and live-capture endpoints remain for the current standup; historical rows are retained but not exposed. `/standups` and `/standups/:id` redirect to Tasks in the SPA.
 
 | Method | Path | Role | Notes |
 |---|---|---|---|
 | GET | `/standups/today` | any | today's session or `null` |
-| GET | `/standups/sessions?status=&start=&end=` | manager all, employee participating | paginated, newest first, date range, open counts |
 | POST | `/standups/sessions` | manager | `{session_date?, participant_ids?, facilitator_id?}` |
 | GET | `/standups/sessions/{id}` | participant/manager | participants + pre-meeting notes |
 | POST | `/standups/sessions/{id}/start` | manager | idempotent if already in progress |
-| GET | `/standups/sessions/{id}/summary` | participant/manager | preview or completed summary |
 | POST | `/standups/sessions/{id}/complete` | manager | `{notes?, force?}` |
 | POST | `/standups/sessions/{id}/participants/{user_id}/pre-meeting` | self (until reviewed) | legacy pre-meeting contract; the UI uses daily updates and direct task updates |
 | GET | `/standups/sessions/{id}/participants/{user_id}/workspace` | participant/manager | exception-first workspace |
@@ -258,13 +273,7 @@ Resolving a blocker preserves task status and records `resolved_at`, `resolved_b
 | POST | `/standups/sessions/{id}/action-items` | manager | create follow-up |
 | POST | `/standups/sessions/{id}/decisions` | manager | record decision |
 | POST | `/standups/sessions/{id}/notes` | manager | free-text note |
-| GET | `/standups/sessions/{id}/notes` | participant/manager | session notes |
 | PATCH | `/standups/sessions/{id}/tasks/{task_id}/status` | manager | status change attributed to the session |
-| GET | `/standups/sessions/{id}/captures` | participant/manager | all structured records captured in the session |
-| GET | `/standups/sessions/{id}/outcomes` | participant/manager | next actions, unresolved help still open now, decisions |
-| GET | `/standups/sessions/{id}/timeline` | participant/manager | audit events for the session |
-| GET | `/standups/users/{user_id}/history?start=&end=&limit=` | self/manager | historical reports, blockers, actions, decisions |
-| GET | `/standups/users/{user_id}/carry-forward` | self/manager | open blockers/action items, at-risk and overdue tasks |
 
 ### Create today's session
 
@@ -327,16 +336,6 @@ POST /api/v1/standups/sessions/{session_id}/updates
 
 The record gets `source=standup`, `session_id`, author = current manager and an audit event with `source=manager_action`.
 
-### Outcomes
-
-`GET /api/v1/standups/sessions/{id}/outcomes` returns:
-
-- `action_items`: owned commitments recorded in the session (with completion status);
-- `unresolved_blockers`: open blockers for participants or reported in the session, including carry-forward origin/age;
-- `decisions`: decisions recorded in the session;
-- counts for updates, participants and reviews.
-
-This is the data behind the outcome-first history page.
 
 ### Complete
 
@@ -349,7 +348,7 @@ If participants are unreviewed and `force=false`, `409` with `details.unreviewed
 
 ---
 
-## 7. Work intake
+## 7. Work intake (retired — route not registered)
 
 | Method | Path | Role | Notes |
 |---|---|---|---|
@@ -372,7 +371,7 @@ Managers see the full trail. Employees see events they acted on, events in sessi
 
 ---
 
-## 9. AI reconciliation
+## 9. AI reconciliation (retired — routes not registered; retained records)
 
 | Method | Path | Role | Notes |
 |---|---|---|---|

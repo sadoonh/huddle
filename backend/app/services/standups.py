@@ -8,12 +8,11 @@ session can never erase an open commitment.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.config import get_settings
 from app.core.errors import ConflictError, DomainValidationError, ForbiddenError, NotFoundError
 from app.core.rbac import (
     ensure_session_visible,
@@ -86,7 +85,7 @@ from app.schemas.tasks import (
     TaskUpdateCreate,
 )
 from app.schemas.today import DailyUpdateOut
-from app.services.attention import attention_score, exception_reasons
+from app.services.attention import blocked_text_filter, is_blocked_text, task_query
 from app.services.audit import record_event
 from app.services.daily_updates import get_for_user_date
 from app.services.tasks import (
@@ -96,9 +95,8 @@ from app.services.tasks import (
     create_decision,
     patch_task,
     resolve_blocker,
+    visible_task_filter,
 )
-
-settings = get_settings()
 
 
 # ---------------------------------------------------------------------------
@@ -376,29 +374,8 @@ def _summary_text(db: Session, session: StandupSession, counts: dict[str, int]) 
     ]
     if counts["updates"]:
         lines.append(f"{counts['updates']} progress update(s) recorded.")
-    if counts["blockers_created"] or counts["blockers_resolved"]:
-        lines.append(
-            f"{counts['blockers_created']} blocker(s) reported, "
-            f"{counts['blockers_resolved']} resolved."
-        )
-    if counts["action_items"]:
-        lines.append(
-            f"{counts['action_items']} action item(s) created, "
-            f"{counts['open_action_items']} still open."
-        )
     if counts["decisions"]:
         lines.append(f"{counts['decisions']} decision(s) recorded.")
-    participant_ids = [p.user_id for p in session.participants]
-    open_blockers = db.scalars(
-        select(Blocker)
-        .join(Task, Blocker.task_id == Task.id)
-        .where(
-            Task.assignee_id.in_(participant_ids),
-            Blocker.status == BlockerStatus.OPEN,
-        )
-    ).all()
-    if open_blockers:
-        lines.append(f"{len(open_blockers)} unresolved blocker(s) carry forward.")
     if unreviewed:
         lines.append(f"Not reviewed: {', '.join(unreviewed)}.")
     return " ".join(lines)
@@ -540,6 +517,11 @@ def _participant_or_404(db: Session, session_id: str, user_id: str) -> StandupPa
 # ---------------------------------------------------------------------------
 # Workspace
 # ---------------------------------------------------------------------------
+def _updated(card) -> float:
+    """Sort key: most recently touched first, no date-related fields."""
+    return card.updated_at.timestamp()
+
+
 def build_workspace(
     db: Session, user: User, session_id: str, user_id: str
 ) -> ParticipantWorkspace:
@@ -565,42 +547,33 @@ def build_workspace(
         .all()
     )
 
-    today = date.today()
-    upcoming_cutoff = today + timedelta(days=settings.upcoming_due_days)
     needs_attention: list = []
     active: list = []
     other: list = []
-    attention_scores: dict[str, int] = {}
 
     for task in tasks:
         card = workspace_task(task)
-        reasons = exception_reasons(task)
-        score = attention_score(reasons)
-        if reasons:
+        if is_blocked_text(task) and task.status not in TaskStatus.closed_statuses():
             needs_attention.append(card)
-            attention_scores[task.id] = score
-        elif task.status not in TaskStatus.closed_statuses() and (
-            task.status == TaskStatus.IN_PROGRESS
-            or (task.due_date and task.due_date <= upcoming_cutoff)
-        ):
+        elif task.status in (TaskStatus.TODO, TaskStatus.IN_PROGRESS):
             active.append(card)
         else:
             other.append(card)
 
-    needs_attention.sort(key=lambda t: -attention_scores.get(t.id, 0))
+    # Date-free ordering with stable UUID tie-breaks.
+    needs_attention.sort(key=lambda t: (-_updated(t), t.title.lower(), t.id))
 
     def _active_key(t):
         return (
-            t.due_date is None,
-            t.due_date or date.max,
-            0 if t.status == TaskStatus.IN_PROGRESS else 1,
+            0 if t.status == TaskStatus.TODO else 1,
+            -_updated(t),
+            t.title.lower(),
+            t.id,
         )
 
     active.sort(key=_active_key)
-    other.sort(key=lambda t: (t.status.value, t.due_date or date.max))
+    other.sort(key=lambda t: (t.status.value, -_updated(t), t.title.lower(), t.id))
 
-    open_blockers = _carried_blockers(db, user_id)
-    open_actions = _carried_actions(db, user_id)
     daily = get_for_user_date(db, user_id, session.session_date)
 
     recent_updates = list(
@@ -646,8 +619,8 @@ def build_workspace(
         session_id=session.id,
         participant=participant_out(
             participant,
-            open_blocker_count=len(open_blockers),
-            open_action_item_count=len(open_actions),
+            open_blocker_count=0,
+            open_action_item_count=0,
             has_daily_update=daily is not None,
             daily_update=daily,
         ),
@@ -655,8 +628,9 @@ def build_workspace(
         needs_attention=needs_attention,
         active=active,
         other=other,
-        carried_blockers=[carried_blocker(b) for b in open_blockers],
-        carried_action_items=[carried_action_item(a) for a in open_actions],
+        # Legacy carry-forward is historical only; active attention is task text.
+        carried_blockers=[],
+        carried_action_items=[],
         recent_updates=[task_update_out(u) for u in recent_updates],
         recent_decisions=[decision_out(d) for d in recent_decisions],
     )
@@ -718,18 +692,19 @@ def capture_progress(
     task = get_task_or_404(db, payload.task_id)
     ensure_task_visible(user, task)
 
+    update_payload: dict = {
+        "progress": payload.progress,
+        "next_steps": payload.next_steps,
+        "attributed_to_user_id": payload.attributed_to_user_id or task.assignee_id,
+        "status": payload.status,
+        "expected_version": payload.expected_version,
+        "client_operation_id": payload.client_operation_id,
+    }
     update = add_task_update(
         db,
         user,
         task,
-        TaskUpdateCreate(
-            progress=payload.progress,
-            next_steps=payload.next_steps,
-            attributed_to_user_id=payload.attributed_to_user_id or task.assignee_id,
-            status=payload.status,
-            expected_version=payload.expected_version,
-            client_operation_id=payload.client_operation_id,
-        ),
+        TaskUpdateCreate(**update_payload),
         session_id=session.id,
         source=UpdateSource.STANDUP,
         audit_source=AuditSource.MANAGER_ACTION,
@@ -991,18 +966,29 @@ def session_captures(db: Session, user: User, session_id: str) -> SessionCapture
 
 
 def session_outcomes(db: Session, user: User, session_id: str) -> SessionOutcomes:
-    """Outcome-first view: actions, unresolved help, decisions."""
+    """Active outcomes: recorded updates, decisions and currently blocked tasks.
+
+    Legacy action-item/unresolved-blocker arrays remain in the contract for old
+    links but are always empty; the rows are still stored and served by the
+    legacy captures/history endpoints.
+    """
     session = get_session_or_404(db, session_id)
     ensure_session_visible(user, session)
     participant_ids = [participant.user_id for participant in session.participants]
 
-    action_items = list(
+    updates = list(
         db.scalars(
-            select(ActionItem)
-            .options(selectinload(ActionItem.task), selectinload(ActionItem.owner))
-            .where(ActionItem.session_id == session.id)
-            .order_by(ActionItem.created_at.asc())
-        ).all()
+            select(TaskUpdate)
+            .options(
+                selectinload(TaskUpdate.task),
+                selectinload(TaskUpdate.author),
+                selectinload(TaskUpdate.attributed_to),
+            )
+            .where(TaskUpdate.session_id == session.id)
+            .order_by(TaskUpdate.created_at.asc(), TaskUpdate.id.asc())
+        )
+        .unique()
+        .all()
     )
     decisions = list(
         db.scalars(
@@ -1017,36 +1003,28 @@ def session_outcomes(db: Session, user: User, session_id: str) -> SessionOutcome
         ).all()
     )
 
-    blocker_stmt = (
-        select(Blocker)
-        .options(
-            selectinload(Blocker.task),
-            selectinload(Blocker.owner),
-            selectinload(Blocker.reported_session),
-        )
-        .outerjoin(Task, Blocker.task_id == Task.id)
-        .where(Blocker.status == BlockerStatus.OPEN)
-        .where(
-            or_(
-                Blocker.reported_session_id == session.id,
-                Task.assignee_id.in_(participant_ids),
-                Blocker.owner_id.in_(participant_ids),
-            )
-        )
+    blocked_stmt = task_query().where(
+        Task.assignee_id.in_(participant_ids),
+        Task.status.notin_(TaskStatus.closed_statuses()),
+        blocked_text_filter(),
     )
-    blockers: dict[str, Blocker] = {}
-    for blocker in db.scalars(blocker_stmt).unique().all():
-        blockers[blocker.id] = blocker
-
-    updates_count = db.scalar(
-        select(func.count(TaskUpdate.id)).where(TaskUpdate.session_id == session.id)
-    ) or 0
+    if not is_manager(user):
+        blocked_stmt = visible_task_filter(blocked_stmt, user)
+    blocked_tasks = list(
+        db.scalars(
+            blocked_stmt.order_by(Task.updated_at.desc(), Task.id.asc())
+        )
+        .unique()
+        .all()
+    )
 
     return SessionOutcomes(
-        action_items=[action_item_out(item) for item in action_items],
-        unresolved_blockers=[carried_blocker(blocker) for blocker in blockers.values()],
+        action_items=[],
+        unresolved_blockers=[],
         decisions=[decision_out(decision) for decision in decisions],
-        updates_count=updates_count,
+        updates=[task_update_out(update) for update in updates],
+        blocked_tasks=[task_out(task, user) for task in blocked_tasks],
+        updates_count=len(updates),
         participant_count=len(session.participants),
         reviewed_count=sum(1 for p in session.participants if p.reviewed_at),
     )
@@ -1188,21 +1166,16 @@ def carry_forward(db: Session, requester: User, user_id: str) -> CarryForwardOut
             .where(
                 Task.assignee_id == target.id,
                 Task.status.notin_(TaskStatus.closed_statuses()),
-                or_(
-                    Task.is_at_risk.is_(True),
-                    Task.due_date < date.today(),
-                ),
+                Task.due_date < date.today(),
             )
             .order_by(Task.due_date.asc())
         )
         .unique()
         .all()
     )
-    at_risk = [task_out(t) for t in tasks if t.is_at_risk]
     overdue = [task_out(t) for t in tasks if t.due_date and t.due_date < date.today()]
     return CarryForwardOut(
         blockers=[carried_blocker(b) for b in blockers],
         action_items=[carried_action_item(a) for a in actions],
-        at_risk_tasks=at_risk,
         overdue_tasks=overdue,
     )

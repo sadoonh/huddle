@@ -14,13 +14,12 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Dev-only identity. The product default is Maya Chen; production identity comes
+ * from nex SSO/Cognito. A stored key remains only for automated browser tests.
+ */
 export function getDevUser(): string {
   return localStorage.getItem(DEV_USER_KEY) ?? 'manager@nex.local'
-}
-
-export function setDevUser(email: string): void {
-  localStorage.setItem(DEV_USER_KEY, email)
-  window.dispatchEvent(new Event('nex:identity'))
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -57,6 +56,7 @@ export const api = {
     request<T>(path, { method: 'POST', body: JSON.stringify(body ?? {}) }),
   patch: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: 'PATCH', body: JSON.stringify(body ?? {}) }),
+  delete: <T = void>(path: string) => request<T>(path, { method: 'DELETE' }),
   put: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: 'PUT', body: JSON.stringify(body ?? {}) }),
   upload: <T>(path: string, form: FormData) =>

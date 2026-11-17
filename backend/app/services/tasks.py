@@ -6,9 +6,7 @@ dependency commits all of it atomically.
 
 from __future__ import annotations
 
-from datetime import date
-
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, case, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.errors import ConflictError, DomainValidationError, ForbiddenError, NotFoundError
@@ -44,7 +42,9 @@ from app.schemas.tasks import (
     TaskCreate,
     TaskPatch,
     TaskUpdateCreate,
+    TaskUpdatePatch,
 )
+from app.services.attention import blocked_text_filter
 from app.services.audit import record_event, snapshot
 
 _TASK_FIELDS = (
@@ -55,9 +55,15 @@ _TASK_FIELDS = (
     "priority",
     "status",
     "due_date",
-    "is_at_risk",
-    "at_risk_reason",
+    "blocked_by",
 )
+
+
+def _normalise_blocked_by(value: str | None) -> str | None:
+    """Trim free text; blank input means "no blocker" and is stored as NULL."""
+    if value is None:
+        return None
+    return value.strip() or None
 
 
 def _task_query() -> Select:
@@ -87,42 +93,84 @@ def list_tasks(
     blocked: bool | None = None,
     overdue: bool | None = None,
     q: str | None = None,
+    sort: str = "-updated",
     limit: int = 100,
     offset: int = 0,
 ) -> tuple[list[Task], int]:
     stmt = visible_task_filter(_task_query(), user)
     if project_id:
         stmt = stmt.where(Task.project_id == project_id)
-    if assignee_id:
+    if assignee_id == "unassigned":
+        stmt = stmt.where(Task.assignee_id.is_(None))
+    elif assignee_id:
         stmt = stmt.where(Task.assignee_id == assignee_id)
     if status:
         stmt = stmt.where(Task.status.in_(status))
     if priority:
         stmt = stmt.where(Task.priority == priority)
+    # Human-readable public ids are searchable alongside the title.
     if q:
-        stmt = stmt.where(Task.title.ilike(f"%{q.strip()}%"))
+        term = f"%{q.strip()}%"
+        stmt = stmt.where(or_(Task.title.ilike(term), Task.public_id.ilike(term)))
     if blocked:
-        stmt = stmt.where(
-            select(Blocker.id)
-            .where(Blocker.task_id == Task.id, Blocker.status == BlockerStatus.OPEN)
-            .exists()
+        # Active product: blocked means non-blank free text on the task itself.
+        stmt = stmt.where(blocked_text_filter())
+    # ``overdue`` is accepted for backwards-compatible links but has no effect:
+    # due dates no longer drive active filtering.
+
+    raw_sort = (sort or "-updated").strip() or "-updated"
+    sort_key = raw_sort[1:] if raw_sort.startswith("-") else raw_sort
+    descending = raw_sort.startswith("-")
+    if sort_key == "due":
+        # Legacy due-date sort links land on the active default ordering.
+        sort_key, descending = "updated", True
+    if sort_key not in {"title", "owner", "status", "updated"}:
+        raise DomainValidationError(
+            "Unsupported sort. Use updated, title, owner or status, optionally "
+            "prefixed with '-'."
         )
-    if overdue:
-        stmt = stmt.where(
-            Task.due_date < date.today(), Task.status.notin_(TaskStatus.closed_statuses())
-        )
+    if sort_key == "owner":
+        stmt = stmt.outerjoin(User, Task.assignee_id == User.id)
 
     total = db.scalar(select(func.count()).select_from(stmt.order_by(None).subquery())) or 0
+    order = _task_order(sort_key, descending)
     rows = (
-        db.scalars(
-            stmt.order_by(Task.due_date.is_(None), Task.due_date.asc(), Task.updated_at.desc())
-            .limit(limit)
-            .offset(offset)
-        )
+        db.scalars(stmt.order_by(*order).limit(limit).offset(offset))
         .unique()
         .all()
     )
     return list(rows), total
+
+
+def _task_order(sort_key: str, descending: bool) -> list:
+    """Workflow-aware, stable ordering. Due dates and names are never-null sorts."""
+    if sort_key == "title":
+        column = func.lower(Task.title)
+        return [column.desc() if descending else column.asc(), Task.id.asc()]
+    if sort_key == "owner":
+        column = func.lower(User.full_name)
+        return [
+            User.full_name.is_(None),
+            column.desc() if descending else column.asc(),
+            Task.id.asc(),
+        ]
+    if sort_key == "status":
+        status_rank = case(
+            (Task.status == TaskStatus.BACKLOG, 0),
+            (Task.status == TaskStatus.TODO, 1),
+            (Task.status == TaskStatus.IN_PROGRESS, 2),
+            (Task.status == TaskStatus.DONE, 3),
+            (Task.status == TaskStatus.CANCELED, 4),
+            else_=5,
+        )
+        return [status_rank.desc() if descending else status_rank.asc(), Task.id.asc()]
+    if sort_key == "updated":
+        return [
+            Task.updated_at.desc() if descending else Task.updated_at.asc(),
+            Task.id.asc(),
+        ]
+    # Defensive: ``sort_key`` is validated by the caller.
+    return [Task.updated_at.desc(), Task.id.asc()]
 
 
 def get_task(db: Session, user: User, task_id: str) -> Task:
@@ -156,16 +204,16 @@ def create_task(db: Session, user: User, payload: TaskCreate) -> Task:
     if payload.status == TaskStatus.DONE:
         raise DomainValidationError("Create the task before marking it done")
 
+    description = payload.description.strip() if payload.description else None
     task = Task(
         project_id=payload.project_id,
         title=payload.title.strip(),
-        description=payload.description,
+        description=description,
         assignee_id=payload.assignee_id,
         priority=payload.priority,
         status=payload.status,
         due_date=payload.due_date,
-        is_at_risk=payload.is_at_risk,
-        at_risk_reason=payload.at_risk_reason,
+        blocked_by=_normalise_blocked_by(payload.blocked_by),
         created_by_id=user.id,
         client_operation_id=payload.client_operation_id,
     )
@@ -181,6 +229,31 @@ def create_task(db: Session, user: User, payload: TaskCreate) -> Task:
         source=AuditSource.TASK_INTERFACE,
         new=snapshot(task, _TASK_FIELDS),
     )
+
+    # The description written at creation is the task's first progress update,
+    # so it appears in Latest update and the standup history immediately.
+    if description:
+        update = TaskUpdate(
+            task_id=task.id,
+            author_id=user.id,
+            source=UpdateSource.TASK_INTERFACE,
+            progress=description,
+        )
+        db.add(update)
+        db.flush()
+        record_event(
+            db,
+            event_type="task.update_added",
+            entity_type="task",
+            entity_id=task.id,
+            actor=user,
+            source=AuditSource.TASK_INTERFACE,
+            new={
+                "update_id": update.id,
+                "progress": update.progress,
+                "client_operation_id": None,
+            },
+        )
     return task
 
 
@@ -226,7 +299,7 @@ def patch_task(
         changes["priority"] = Priority(changes["priority"])
 
     for field, value in changes.items():
-        if field in ("title", "description", "at_risk_reason") and isinstance(value, str):
+        if field in ("title", "description", "blocked_by") and isinstance(value, str):
             value = value.strip()
             if field != "title" and not value:
                 value = None
@@ -237,9 +310,6 @@ def patch_task(
             task.completed_at = utcnow()
         elif status_before == TaskStatus.DONE:
             task.completed_at = None
-        if task.status == TaskStatus.DONE and task.is_at_risk:
-            task.is_at_risk = False
-            task.at_risk_reason = None
 
     task.version += 1
     db.flush()
@@ -319,18 +389,21 @@ def add_task_update(
 
     status = getattr(payload, "status", None)
     expected_version = getattr(payload, "expected_version", None)
+    patch_fields: dict = {}
     if status is not None:
         status = TaskStatus(status)
         if status != task.status:
-            # Same transaction: a version conflict rolls back the update too.
-            patch_task(
-                db,
-                user,
-                task.id,
-                TaskPatch(status=status, expected_version=expected_version),
-                session_id=session_id,
-                audit_source=audit_source,
-            )
+            patch_fields["status"] = status
+    if patch_fields:
+        # Same transaction: a version conflict rolls back the update too.
+        patch_task(
+            db,
+            user,
+            task.id,
+            TaskPatch(expected_version=expected_version, **patch_fields),
+            session_id=session_id,
+            audit_source=audit_source,
+        )
     record_event(
         db,
         event_type="task.update_added",
@@ -348,6 +421,132 @@ def add_task_update(
         },
     )
     return update
+
+
+def _task_update_snapshot(update: TaskUpdate) -> dict:
+    return {
+        "update_id": update.id,
+        "task_id": update.task_id,
+        "progress": update.progress,
+        "next_steps": update.next_steps,
+        "blocked_by": update.blocked_by,
+        "author_id": update.author_id,
+        "attributed_to_user_id": update.attributed_to_user_id,
+        "session_id": update.session_id,
+        "source": update.source.value,
+        "client_operation_id": update.client_operation_id,
+        "created_at": update.created_at.isoformat(),
+    }
+
+
+def _get_task_update_or_404(
+    db: Session, task: Task, update_id: str
+) -> TaskUpdate:
+    update = db.scalar(
+        select(TaskUpdate).where(
+            TaskUpdate.id == update_id,
+            TaskUpdate.task_id == task.id,
+        )
+    )
+    if update is None:
+        raise NotFoundError("Task update not found")
+    return update
+
+
+def _check_update_version(task: Task, expected_version: int | None) -> None:
+    if expected_version is not None and expected_version != task.version:
+        raise ConflictError(
+            "Task changed since you loaded it. Refresh and re-apply your edit.",
+            details={"current_version": task.version, "expected_version": expected_version},
+        )
+
+
+def _touch_task_for_update_mutation(task: Task) -> None:
+    task.version += 1
+    task.updated_at = utcnow()
+
+
+def _ensure_can_mutate_update(user: User, update: TaskUpdate) -> None:
+    # Attribution is not authorship: only the recorded author or a manager/admin
+    # may edit/delete historic text, even if the actor is the task assignee.
+    if is_manager(user) or update.author_id == user.id:
+        return
+    raise ForbiddenError("Only the author or a manager can change this update")
+
+
+def edit_task_update(
+    db: Session,
+    user: User,
+    task_id: str,
+    update_id: str,
+    payload: TaskUpdatePatch,
+) -> TaskUpdate:
+    task = get_task_or_404(db, task_id)
+    ensure_task_visible(user, task)
+    update = _get_task_update_or_404(db, task, update_id)
+    _ensure_can_mutate_update(user, update)
+    _check_update_version(task, payload.expected_version)
+
+    progress = payload.progress.strip()
+    if not progress:
+        raise DomainValidationError("Update text is required.")
+
+    previous = _task_update_snapshot(update)
+    update.progress = progress
+    if "next_steps" in payload.model_fields_set:
+        trimmed_next_steps = payload.next_steps.strip() if payload.next_steps else None
+        update.next_steps = trimmed_next_steps or None
+    _touch_task_for_update_mutation(task)
+    db.flush()
+    db.expire(task, ["updates"])
+    record_event(
+        db,
+        event_type="task.update_edited",
+        entity_type="task",
+        entity_id=task.id,
+        actor=user,
+        source=AuditSource.TASK_INTERFACE,
+        session_id=previous["session_id"],
+        previous=previous,
+        new={
+            "update_id": update.id,
+            "progress": update.progress,
+            "next_steps": update.next_steps,
+        },
+    )
+    return update
+
+
+def delete_task_update(
+    db: Session,
+    user: User,
+    task_id: str,
+    update_id: str,
+    *,
+    expected_version: int | None = None,
+) -> None:
+    task = get_task_or_404(db, task_id)
+    ensure_task_visible(user, task)
+    update = _get_task_update_or_404(db, task, update_id)
+    _ensure_can_mutate_update(user, update)
+    _check_update_version(task, expected_version)
+
+    previous = _task_update_snapshot(update)
+    db.delete(update)
+    _touch_task_for_update_mutation(task)
+    db.flush()
+    db.expire(task, ["updates"])
+    record_event(
+        db,
+        event_type="task.update_deleted",
+        entity_type="task",
+        entity_id=task.id,
+        actor=user,
+        source=AuditSource.TASK_INTERFACE,
+        session_id=previous["session_id"],
+        previous=previous,
+        new={"update_id": previous["update_id"], "deleted": True},
+    )
 
 
 def add_update_endpoint(db: Session, user: User, task_id: str, payload: TaskUpdateCreate):
@@ -704,7 +903,7 @@ def task_detail(db: Session, user: User, task_id: str):
     from app.schemas.tasks import TaskDetail  # local import keeps module light
 
     task = get_task(db, user, task_id)
-    base = task_out(task)
+    base = task_out(task, user)
     return TaskDetail(
         **base.model_dump(),
         updates=[task_update_out(u) for u in task.updates],

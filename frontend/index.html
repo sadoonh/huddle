@@ -3,8 +3,44 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Standup-first project and task management for the analytics team." />
-    <title>Standup · nex</title>
+    <meta name="description" content="nex — Huddle: daily work and a focused huddle for the analytics team." />
+    <meta name="theme-color" content="#292D34" />
+    <script>
+      ;(function () {
+        var preference = 'system'
+        try {
+          var stored = localStorage.getItem('nex.huddle.theme')
+          if (stored === 'light' || stored === 'dark' || stored === 'system') preference = stored
+        } catch (error) {
+          /* storage blocked: keep System */
+        }
+        var dark = preference === 'dark'
+        if (preference === 'system') {
+          try {
+            dark = window.matchMedia('(prefers-color-scheme: dark)').matches
+          } catch (error) {
+            /* matchMedia unavailable: render light until the provider resolves */
+          }
+        }
+        try {
+          var root = document.documentElement
+          root.dataset.theme = dark ? 'dark' : 'light'
+          root.style.colorScheme = dark ? 'dark' : 'light'
+          var meta = document.querySelector('meta[name="theme-color"]')
+          if (meta) meta.setAttribute('content', dark ? '#11151B' : '#292D34')
+        } catch (error) {
+          /* applying the theme should never block first paint */
+        }
+      })()
+    </script>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <title>Huddle · nex</title>
   </head>
   <body>
     <div id="root"></div>

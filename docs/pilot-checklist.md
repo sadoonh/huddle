@@ -1,6 +1,6 @@
-# Simplification pilot checklist
+# Pilot checklist — Tasks and Standup
 
-Use this for the two-week validation of the simplified **Today + Work + focused standup** experience. The goal is not a neat screen — it is fewer missed commitments, fewer incorrect owners, and less time spent maintaining records.
+Use this for the two-week validation of the current product: **Tasks holds the work in Board or Table, with project filtering and a small project creator. A single Standup button gives the manager a focused view and a quick way back.**
 
 ## 1. Before the pilot
 
@@ -8,100 +8,65 @@ Record a baseline (last 2–4 weeks where available):
 
 - Standup duration.
 - Time spent after the meeting writing up updates/actions.
-- Number of carry-forward blockers/follow-ups older than 3 days.
-- Number of action items without an owner.
+- Carry-forward blockers/follow-ups older than 3 days.
+- Action items without an owner.
 - How often someone says “I didn’t know that changed.”
 - Where people currently look first (tracker, notes, chat).
 
-Do not collect transcript or note contents for this experiment. Aggregate timings/counts are enough.
+Do not collect transcript or note contents for this experiment. Aggregate counts/timings are enough.
 
 ## 2. Participants and devices
 
 - One facilitator (manager) and 2–5 employees.
 - At least one laptop session and one narrow/mobile-width session.
-- At least one keyboard-only pass through Today, the meeting and Work.
+- At least one keyboard-only pass through Tasks, the update dialog and the standup.
+- A fresh database (`make seed`) and an existing local database (launcher schema update) to prove Ad hoc provisioning.
 
 ## 3. Required scenarios
 
 | # | Scenario | Pass condition |
 |---|---|---|
-| 1 | Employee opens Today with no session yet | Attention + current work are visible; the question “Anything changed?” is optional |
-| 2 | Employee writes a general daily update | One field; saved receipt; no second standup form |
-| 3 | Employee updates a task from its row | Update and optional status change happen in place; no board visit |
-| 4 | Employee clicks “Needs help” without a task | A durable team-wide blocker is created and visible to the manager |
-| 5 | Manager starts standup from Today | One action enters focused mode; no global navigation |
-| 6 | Manager captures update/help/follow-up/decision | Drawer keeps person/task context; one field initially; saved confirmation |
-| 7 | Manager switches person with an unsaved draft | Prompt to discard; no text is attached to the wrong person |
-| 8 | Manager skips an unreviewed person and finishes | Explicit override is required; names are shown |
-| 9 | Manager opens Past standups and a session | Outcomes (actions/help/decisions) appear first; bookkeeping is collapsed |
-| 10 | Employee has empty work or no attention items | Empty state does not look like a loading failure |
-| 11 | Long attention queue (>25 items) | “Show more” reveals the full set; total is accurate |
-| 12 | Stale task edit (two tabs) | `409` surfaces; newer data is not overwritten |
-| 13 | No-change day | Employee submits nothing; absence is not treated as confirmation |
-| 14 | Taskless blocker appears in a later standup | Still visible until resolved; origin/age preserved |
-| 15 | Work list search/filter/pagination | Full result set is reachable; no Kanban columns in default Work |
-| 16 | Dev identity switch | The previous identity's tasks/attention never appear under the new identity |
-| 17 | Retry a create after a lost response | One record, not a duplicate |
-| 18 | Browser Back with an unsaved meeting draft | In-app discard confirmation; cancel keeps the meeting and text |
-| 19 | Open a task | State and latest update appear before edit fields; Add update works in place |
-| 20 | Work reload/Back with filters and a task open | Search, filters, page and task context are restored |
+| 1 | Manager opens Tasks | Board/Table share project/owner/status/search filters; last presentation is remembered |
+| 2 | To Do category | Backlog and todo tasks appear together under **To Do** with the gray backlog dot; no separate Backlog lane or status option |
+| 3 | Board card | Owner avatar/name aligns with the task title and public ID; priority is visible top-right; drag/keyboard move works |
+| 4 | Table | Priority column is present; status picker offers To Do / In Progress / Done / Canceled, saves with version protection and Undo |
+| 5 | Update dialog | Field label says **Add update**; Status, Owner and Priority sit together above Save update; Save update has symmetric padding |
+| 6 | Filters | Draft until Apply; Escape changes nothing; chips remove criteria; Clear filters keeps layout/search |
+| 7 | Global New task | Project defaults visibly to **Ad hoc**; explicit project context wins; a Description becomes the task's first update |
+| 8 | Project filter + create | Filter scopes Board/Table to one project; the manager's small **New project** dialog creates a project and refreshes filter options; no Projects tab or page remains |
+| 9 | Standup entry | Tasks has one **Standup** button; no Start/Resume/New/View outcomes wording |
+| 10 | Standup view | Manager layout shows In Progress / To Do / Blocked and a collapsed Done; rows omit repeated owner/status and there is no Current work heading |
+| 11 | Standup exit | **Back to Tasks** and **Finish standup** return directly to Tasks without a leave confirmation; completed view is read-only |
+| 12 | Past standups | No Past standups page/link, no outcomes page, `/standups` and `/standups/:id` redirect to Tasks; historical APIs return no data |
+| 13 | Stale edit | `409` retains input and offers latest-state recovery; no silent overwrite |
+| 14 | Read-only work | No movement controls; direct API attempt is forbidden |
+| 15 | Legacy links | `/work`, `/board`, `/legacy/board`, `/projects`, `/settings/projects` redirect; `/ai` and `/intake` are retired notices |
+| 16 | Account menu | Real identity/context; keyboard/Escape/focus return; no fake actions or identity switcher |
+| 17 | Narrow width | Navigation reachable; one board lane; bounded table scroll; no document-wide overflow |
+| 18 | Retired surfaces | No Pilot tools/nav/feature flag re-enables intake, transcripts or the legacy board; worker consumes nothing |
+| 19 | Browser Back/Forward | Filters, layout, sort, page and open task restore predictably |
 
-Also test:
+Also test a task with several exceptions, an employee with only backlog/completed work, and an old completed task with an unresolved commitment.
 
-- a person who submits nothing before the meeting;
-- a follow-up owned by the manager rather than the employee;
-- a blocker owned by someone who is not in the standup;
-- an employee with only backlog/completed work.
+## 4. Questions to answer
 
-## 4. Targets
+1. Is the unified To Do category clearer than separate Backlog/To Do lanes?
+2. Is Board or Table the default for most people? Does per-user layout memory match expectations?
+3. Is the single Standup button discoverable and fast enough to enter/leave during a meeting?
+4. Are the update dialog's labels, status picker and save button comfortable at a glance?
+5. Do any retained history/transcript records need a documented manual transition path?
 
-These are acceptance goals for the pilot, not measured current performance.
+Do not delete historical requests, transcripts, proposals or audit data as part of this decision. Use a read-only/export/retention path.
 
-| Test | Target |
-|---|---|
-| Employee identifies what needs attention | ≤5 seconds, no guidance |
-| Employee posts a normal short update | ≤30 seconds, one text field |
-| Manager begins/resumes today’s meeting | One action from Today |
-| Facilitator records an owned follow-up | ≤15 seconds, participant context retained |
-| User updates status or completes a follow-up | In place, without visiting the board/history |
-| User finds a past decision | ≤30 seconds from Today |
-| Default primary navigation | Two destinations |
-| Live meeting layout | One main area + contextual capture, no permanent side panels |
-| Data integrity | No lost blockers, duplicate commitments or wrong attribution |
+## 5. Exit criteria
 
-## 5. Observation guide
+The current experience can replace the previous tools when:
 
-Watch for:
-
-- Where people pause or hunt before their first action.
-- Whether anyone re-enters information already visible.
-- Whether “Needs help” is used for things that are not blockers.
-- Whether managers finish without reviewing people, and why.
-- Whether attendees ask for the board/intake/AI links.
-- Whether outcomes pages answer “what did we agree?” without opening audit.
-
-Capture short, aggregate notes only; do not store meeting contents for analysis.
-
-## 6. Decision points
-
-After the pilot, decide:
-
-1. Keep or retire **intake** — is there a real requester/approval workflow?
-2. Keep or retire the **legacy board** — does anyone plan outside standups?
-3. Keep or retire **transcript reconciliation** — does review cost less time than it saves?
-4. Is a general update before a session required? (Current answer: yes; it is supported by `daily_updates`.)
-5. What team size must the participant selector support?
-
-Do not delete historical requests, transcripts, proposals, flags or audit data as part of this decision. Use a read-only/export/retention path.
-
-## 7. Exit criteria
-
-The simplified experience can replace the previous default when:
-
-- The 15 scenarios pass in normal laptop and narrow widths.
+- The 19 scenarios pass on laptop and narrow widths.
 - No critical data-integrity regression is observed.
-- Facilitators do not need a second tracker/notes tool during the meeting.
+- Facilitators can enter and leave the standup without losing context.
 - Employees do not report re-entering information.
-- Outstanding commitments remain visible without the old carry-forward dashboard.
+- Outstanding commitments remain visible in Tasks and the standup.
+- Any manual retirement of retained cloud/history resources has an approved plan.
 
-If a target fails, fix visibility or flow before removing legacy access. The legacy board and pilot tools remain reachable at `/legacy/board`, `/intake` and `/ai` during this period.
+If a target fails, fix the flow before restoring a retired surface. Do not re-add Pilot tools or a past-standups archive as a shortcut.

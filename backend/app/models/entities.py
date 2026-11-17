@@ -6,7 +6,8 @@ Design notes
   "now" so tests can freeze time by patching one function.
 * ``Task.version`` is bumped on every accepted task mutation and is used for
   optimistic concurrency (including AI proposal application).
-* Progress updates, audit events and standup notes are append-only.
+* Audit events and standup notes are append-only. Progress update text may be
+  edited/deleted by its author or a manager; audit retains prior values.
 * ``Blocker`` is intentionally separate from ``Task.status``: a task stays
   ``in_progress`` while it has an open blocker.
 """
@@ -90,6 +91,15 @@ class TimestampMixin:
     )
 
 
+class PublicIdSequence(Base):
+    """Per-kind counter backing human-readable public ids (TASK-/PROJ-)."""
+
+    __tablename__ = "public_id_sequences"
+
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    last_value: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 # ---------------------------------------------------------------------------
 # Identity
 # ---------------------------------------------------------------------------
@@ -118,8 +128,12 @@ class User(UUIDMixin, TimestampMixin, Base):
 class Project(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "projects"
 
+    # Human-readable immutable handle (PROJ-<n>); the UUID ``id`` stays primary.
+    public_id: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
+    # Stable designation for system-provisioned projects (currently ``ad_hoc``).
+    system_key: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
     owner_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     status: Mapped[ProjectStatus] = mapped_column(
         enum_col(ProjectStatus), default=ProjectStatus.ACTIVE, nullable=False
@@ -166,8 +180,12 @@ class Task(UUIDMixin, TimestampMixin, Base):
     project_id: Mapped[str] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    # Human-readable immutable handle (TASK-<n>); the UUID ``id`` stays primary.
+    public_id: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
+    # Free-text "Blocked by" note. Independent of the legacy Blocker rows.
+    blocked_by: Mapped[str | None] = mapped_column(Text)
     assignee_id: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), index=True
     )
@@ -178,8 +196,6 @@ class Task(UUIDMixin, TimestampMixin, Base):
         enum_col(TaskStatus), default=TaskStatus.TODO, nullable=False
     )
     due_date: Mapped[date | None] = mapped_column(Date)
-    is_at_risk: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    at_risk_reason: Mapped[str | None] = mapped_column(Text)
     created_by_id: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")
     )
@@ -201,7 +217,7 @@ class Task(UUIDMixin, TimestampMixin, Base):
 
 
 class TaskUpdate(UUIDMixin, Base):
-    """Append-only progress update. Never overwritten; corrections are new rows."""
+    """Progress update. Historic text may be edited/deleted by its author; audit stays append-only."""
 
     __tablename__ = "task_updates"
     __table_args__ = (Index("ix_task_updates_task_created", "task_id", "created_at"),)
@@ -222,6 +238,9 @@ class TaskUpdate(UUIDMixin, Base):
     )
     progress: Mapped[str] = mapped_column(Text, nullable=False)
     next_steps: Mapped[str | None] = mapped_column(Text)
+    # Snapshot of the task's free-text "Blocked by" value at capture time, so
+    # historical updates can render the state they recorded.
+    blocked_by: Mapped[str | None] = mapped_column(Text)
     # Client-generated logical submission id. A retry with the same id returns
     # the original row instead of creating a duplicate update.
     client_operation_id: Mapped[str | None] = mapped_column(
@@ -590,3 +609,10 @@ class AuditEvent(UUIDMixin, Base):
 
     actor: Mapped[User | None] = relationship()
     session: Mapped[StandupSession | None] = relationship()
+
+
+# Register public-id allocators last: every Task/Project ORM insert (services,
+# seed, test fixtures, Ad hoc provisioning) is assigned TASK-<n>/PROJ-<n>.
+from app.core.public_ids import install_public_id_listeners  # noqa: E402
+
+install_public_id_listeners()

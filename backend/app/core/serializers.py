@@ -7,12 +7,10 @@ returns the same shape.
 
 from __future__ import annotations
 
-from datetime import date
-
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.enums import ActionItemStatus, BlockerStatus, TaskStatus
+from app.enums import ActionItemStatus, BlockerStatus
 from app.models import (
     ActionItem,
     AiProposal,
@@ -57,23 +55,25 @@ def user_brief(user: User | None) -> UserBrief | None:
 def task_update_out(update: TaskUpdate) -> TaskUpdateOut:
     out = TaskUpdateOut.model_validate(update)
     out.task_title = update.task.title if update.task else None
+    out.task_public_id = update.task.public_id if update.task else None
     return out
 
 
-def task_out(task: Task) -> TaskOut:
+def task_out(task: Task, user: User | None = None) -> TaskOut:
+    """Serialize a task; pass ``user`` to fill the movement capability."""
     out = TaskOut.model_validate(task)
-    open_blockers = [b for b in task.blockers if b.status == BlockerStatus.OPEN]
+    if user is not None:
+        from app.core.rbac import can_edit_task
+
+        out.can_move = can_edit_task(user, task)
+    # The active product derives "blocked" from free text only. Legacy Blocker
+    # rows and action items are kept for history but never populate active
+    # flags/counts, and due dates no longer mark tasks overdue.
+    out.is_blocked = bool(task.blocked_by and task.blocked_by.strip())
+    out.open_blocker_count = 0
+    out.open_action_item_count = 0
+    out.is_overdue = False
     out.project_name = task.project.name if task.project else None
-    out.is_blocked = bool(open_blockers)
-    out.open_blocker_count = len(open_blockers)
-    out.open_action_item_count = sum(
-        1 for item in task.action_items if item.status == ActionItemStatus.OPEN
-    )
-    out.is_overdue = bool(
-        task.due_date
-        and task.due_date < date.today()
-        and task.status not in TaskStatus.closed_statuses()
-    )
     out.latest_update = task_update_out(task.updates[-1]) if task.updates else None
     return out
 
@@ -162,28 +162,13 @@ def session_counts(db: Session, session_ids: list[str]) -> dict[str, tuple[int, 
 
 
 def workspace_task(task: Task) -> WorkspaceTask:
+    """Active workspace card: free-text attention only, no legacy issue arrays."""
     base = task_out(task)
-    open_blockers = [b for b in task.blockers if b.status == BlockerStatus.OPEN]
-    open_actions = [a for a in task.action_items if a.status == ActionItemStatus.OPEN]
-
-    reasons: list[str] = []
-    if open_blockers:
-        reasons.append("blocker")
-    if base.is_overdue:
-        reasons.append("overdue")
-    if task.is_at_risk:
-        reasons.append("at_risk")
-    if open_actions:
-        reasons.append("follow_up")
-    if not reasons and task.status == TaskStatus.IN_PROGRESS:
-        reasons.append("in_progress")
-    if task.due_date and not base.is_overdue and task.due_date <= date.today():
-        reasons.append("due_soon")
-
+    reasons: list[str] = ["blocked"] if base.is_blocked else []
     return WorkspaceTask(
         **base.model_dump(),
-        open_blockers=[blocker_out(b) for b in open_blockers],
-        open_action_items=[action_item_out(a) for a in open_actions],
+        open_blockers=[],
+        open_action_items=[],
         reasons=reasons,
     )
 

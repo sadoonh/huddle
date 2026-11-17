@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import selectinload
 
@@ -40,6 +40,7 @@ from app.schemas.tasks import (
     TaskStatusChange,
     TaskUpdateCreate,
     TaskUpdateOut,
+    TaskUpdatePatch,
 )
 from app.services import tasks as task_service
 
@@ -61,6 +62,7 @@ def list_tasks(
     blocked: bool | None = None,
     overdue: bool | None = None,
     q: str | None = None,
+    sort: str = "-updated",
 ):
     items, total = task_service.list_tasks(
         db,
@@ -72,11 +74,12 @@ def list_tasks(
         blocked=blocked,
         overdue=overdue,
         q=q,
+        sort=sort,
         limit=pagination.limit,
         offset=pagination.offset,
     )
     return Page[TaskOut](
-        items=[task_out(t) for t in items],
+        items=[task_out(t, user) for t in items],
         total=total,
         limit=pagination.limit,
         offset=pagination.offset,
@@ -85,7 +88,7 @@ def list_tasks(
 
 @router.post("/tasks", response_model=TaskOut, status_code=201)
 def create_task(db: DB, user: CurrentUser, payload: TaskCreate):
-    return task_out(task_service.create_task(db, user, payload))
+    return task_out(task_service.create_task(db, user, payload), user)
 
 
 @router.get("/tasks/{task_id}", response_model=TaskDetail)
@@ -95,7 +98,7 @@ def get_task(db: DB, user: CurrentUser, task_id: str):
 
 @router.patch("/tasks/{task_id}", response_model=TaskOut)
 def patch_task(db: DB, user: CurrentUser, task_id: str, payload: TaskPatch):
-    return task_out(task_service.patch_task(db, user, task_id, payload))
+    return task_out(task_service.patch_task(db, user, task_id, payload), user)
 
 
 @router.patch("/tasks/{task_id}/status", response_model=TaskOut)
@@ -106,7 +109,8 @@ def change_status(db: DB, user: CurrentUser, task_id: str, payload: TaskStatusCh
             user,
             task_id,
             TaskPatch(status=payload.status, expected_version=payload.expected_version),
-        )
+        ),
+        user,
     )
 
 
@@ -125,6 +129,33 @@ def task_updates(db: DB, user: CurrentUser, task_id: str):
 @router.post("/tasks/{task_id}/updates", response_model=TaskUpdateOut, status_code=201)
 def add_update(db: DB, user: CurrentUser, task_id: str, payload: TaskUpdateCreate):
     return task_service.add_update_endpoint(db, user, task_id, payload)
+
+
+@router.patch("/tasks/{task_id}/updates/{update_id}", response_model=TaskUpdateOut)
+def edit_update(
+    db: DB,
+    user: CurrentUser,
+    task_id: str,
+    update_id: str,
+    payload: TaskUpdatePatch,
+):
+    return task_update_out(
+        task_service.edit_task_update(db, user, task_id, update_id, payload)
+    )
+
+
+@router.delete("/tasks/{task_id}/updates/{update_id}", status_code=204)
+def delete_update(
+    db: DB,
+    user: CurrentUser,
+    task_id: str,
+    update_id: str,
+    expected_version: int | None = None,
+):
+    task_service.delete_task_update(
+        db, user, task_id, update_id, expected_version=expected_version
+    )
+    return Response(status_code=204)
 
 
 @router.post("/tasks/{task_id}/blockers", response_model=BlockerOut, status_code=201)

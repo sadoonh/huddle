@@ -75,43 +75,47 @@ def test_workspace_prioritises_exceptions_and_hides_done_from_active(
     active_titles = {t["title"] for t in workspace["active"]}
     other_titles = {t["title"] for t in workspace["other"]}
 
-    assert {"Alpha dashboard", "Overdue reconciliation", "At risk model"} <= needs_titles
-    assert "Plain active work" in active_titles
+    # Legacy blocker rows and due dates no longer drive attention.
+    assert needs_titles == set()
+    assert {
+        "Alpha dashboard",
+        "Overdue reconciliation",
+        "At risk model",
+        "Plain active work",
+    } <= active_titles
     assert "Finished task" not in active_titles
     assert "Finished task" in other_titles
     assert "Backlog idea" in other_titles
 
-    dashboard = next(t for t in workspace["needs_attention"] if t["title"] == "Alpha dashboard")
-    assert {"blocker"} <= set(dashboard["reasons"])
-    overdue = next(t for t in workspace["needs_attention"] if t["title"] == "Overdue reconciliation")
-    assert "overdue" in overdue["reasons"]
+    for card in workspace["active"]:
+        assert not ({"blocker", "overdue", "follow_up", "at_risk", "due_soon"} & set(card["reasons"]))
+        assert card["open_blockers"] == []
+        assert card["open_action_items"] == []
+
+    # Free text is the only attention signal.
+    blocked = client.patch(
+        f"/api/v1/tasks/{team.dashboard.id}",
+        headers=team.auth("manager"),
+        json={"blocked_by": "Waiting on warehouse access"},
+    )
+    assert blocked.status_code == 200
+    refreshed = _workspace(client, team, today_session["id"], team.alice.id)
+    needs_titles = {t["title"] for t in refreshed["needs_attention"]}
+    assert needs_titles == {"Alpha dashboard"}
+    dashboard = refreshed["needs_attention"][0]
+    assert dashboard["reasons"] == ["blocked"]
+    assert dashboard["is_blocked"] is True
+    assert dashboard["open_blockers"] == []
 
 
 def test_carry_forward_and_resolution(
     client: TestClient, team, previous_standup, today_session
 ):
+    # Legacy blockers/actions remain in their own endpoints but no longer
+    # appear as carried commitments in the live workspace.
     workspace = _workspace(client, team, today_session["id"], team.alice.id)
-    assert any(
-        item["description"] == "Alice to validate the marketing schema next week"
-        for item in workspace["carried_action_items"]
-    )
-    assert any(
-        item["description"].startswith("Warehouse access")
-        for item in workspace["carried_blockers"]
-    )
-    action_id = next(
-        item["id"]
-        for item in workspace["carried_action_items"]
-        if item["description"].startswith("Alice to validate")
-    )
-
-    # Completing the follow-up removes it from carry-forward.
-    completed = client.patch(
-        f"/api/v1/action-items/{action_id}",
-        headers=team.auth("alice"),
-        json={"status": "completed"},
-    )
-    assert completed.status_code == 200, completed.text
+    assert workspace["carried_action_items"] == []
+    assert workspace["carried_blockers"] == []
 
     resolved = client.patch(
         f"/api/v1/standups/sessions/{today_session['id']}/blockers/{team.open_blocker.id}/resolve",
@@ -196,58 +200,6 @@ def test_capture_records_inherit_session_and_employee(
     assert note.status_code == 201
 
 
-def test_session_summary_counts_structured_records(
-    client: TestClient, team, today_session
-):
-    sid = today_session["id"]
-    client.post(
-        f"/api/v1/standups/sessions/{sid}/updates",
-        headers=team.auth("manager"),
-        json={"task_id": team.dashboard.id, "progress": "Progress recorded"},
-    )
-    client.post(
-        f"/api/v1/standups/sessions/{sid}/blockers",
-        headers=team.auth("manager"),
-        json={"description": "A new blocker", "task_id": team.at_risk.id},
-    )
-    client.post(
-        f"/api/v1/standups/sessions/{sid}/action-items",
-        headers=team.auth("manager"),
-        json={"description": "Follow up tomorrow", "owner_id": team.alice.id},
-    )
-    summary = client.get(
-        f"/api/v1/standups/sessions/{sid}/summary", headers=team.auth("manager")
-    ).json()
-    assert summary["updates"] == 1
-    assert summary["blockers_created"] == 1
-    assert summary["action_items"] == 1
-    assert summary["open_action_items"] == 1
-    assert "1 blocker(s) reported" in summary["summary_text"]
-
-
-def test_history_reconstructs_what_an_employee_reported(
-    client: TestClient, team, previous_standup
-):
-    history = client.get(
-        f"/api/v1/standups/users/{team.alice.id}/history",
-        headers=team.auth("manager"),
-    )
-    assert history.status_code == 200, history.text
-    body = history.json()
-    assert len(body["entries"]) == 1
-    entry = body["entries"][0]
-    assert entry["participant"]["pre_meeting_progress"] == "Prior update from Alice"
-    assert any(u["progress"] == "Captured during yesterday's standup" for u in entry["updates"])
-    assert any(a["description"].startswith("Alice to validate") for a in entry["action_items"])
-
-
-def test_employee_cannot_read_another_employees_history(client: TestClient, team):
-    response = client.get(
-        f"/api/v1/standups/users/{team.alice.id}/history", headers=team.auth("bob")
-    )
-    assert response.status_code == 403
-
-
 def test_pre_meeting_stays_open_during_live_until_reviewed(
     client: TestClient, team, today_session
 ):
@@ -277,42 +229,3 @@ def test_pre_meeting_stays_open_during_live_until_reviewed(
     assert closed.status_code == 409
 
 
-def test_session_captures_returns_every_structured_type(
-    client: TestClient, team, today_session
-):
-    sid = today_session["id"]
-    client.post(
-        f"/api/v1/standups/sessions/{sid}/updates",
-        headers=team.auth("manager"),
-        json={"task_id": team.dashboard.id, "progress": "Captured update"},
-    )
-    client.post(
-        f"/api/v1/standups/sessions/{sid}/blockers",
-        headers=team.auth("manager"),
-        json={"description": "Captured blocker", "task_id": team.dashboard.id},
-    )
-    client.post(
-        f"/api/v1/standups/sessions/{sid}/action-items",
-        headers=team.auth("manager"),
-        json={"description": "Captured follow-up", "owner_id": team.alice.id},
-    )
-    client.post(
-        f"/api/v1/standups/sessions/{sid}/decisions",
-        headers=team.auth("manager"),
-        json={"description": "Captured decision"},
-    )
-    client.post(
-        f"/api/v1/standups/sessions/{sid}/notes",
-        headers=team.auth("manager"),
-        json={"body": "Captured note"},
-    )
-    captures = client.get(
-        f"/api/v1/standups/sessions/{sid}/captures", headers=team.auth("manager")
-    )
-    assert captures.status_code == 200
-    body = captures.json()
-    assert len(body["updates"]) == 1
-    assert len(body["blockers"]) == 1
-    assert len(body["action_items"]) == 1
-    assert len(body["decisions"]) == 1
-    assert len(body["notes"]) == 1

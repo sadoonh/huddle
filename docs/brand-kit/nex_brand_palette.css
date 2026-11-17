@@ -1,0 +1,24 @@
+/* nex — Charcoal Neutral brand system v1.2 | November 2026
+   Wordmark: white "ne" + Signal Teal "x" on Charcoal.
+   Use Action Teal rather than Signal Teal for interactive text on white.
+   Fonts: Space Grotesk 700 (logo); Manrope 800 (headings); DM Sans (UI).
+*/
+:root {
+  --nex-charcoal: #292D34; /* Primary brand header and dark background */
+  --nex-charcoal-raised: #363B43; /* Header depth and elevated dark surfaces */
+  --nex-charcoal-border: #454B53; /* Dividers and edges on charcoal */
+  --nex-signal-teal: #38D9C5; /* Logo x and dark-background highlights */
+  --nex-signal-teal-hover: #5CE5D3; /* Dark-background logo hover */
+  --nex-action-teal: #087F77; /* Links and UI focus on white */
+  --nex-canvas: #F6F7F8; /* Page background */
+  --nex-surface: #FFFFFF; /* Cards, search and panels */
+  --nex-ink: #252A31; /* Primary content typography */
+  --nex-secondary: #66717C; /* Descriptions and helper text */
+  --nex-border: #E1E5E9; /* Dividers and card borders */
+  --nex-whisper-teal: #EAF7F4; /* Soft selected states */
+  --nex-font-logo: 'Space Grotesk', 'Manrope', system-ui, sans-serif;
+  --nex-font-heading: 'Manrope', 'DM Sans', system-ui, sans-serif;
+  --nex-font-body: 'DM Sans', system-ui, sans-serif;
+  --nex-radius-card: 16px;
+  --nex-radius-control: 11px;
+}

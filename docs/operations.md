@@ -20,6 +20,12 @@ dropping data. For PostgreSQL, `start.sh` runs `alembic upgrade head` instead.
 If a required column cannot be added safely to an existing local database, the
 launcher asks for `RESET=1 ./start.sh`.
 
+The Ad hoc project is provisioned lazily and at startup via a stable
+`projects.system_key = 'ad_hoc'`; `make db-upgrade` / the launcher adds the
+column. A single pre-existing project literally named “Ad hoc” is adopted once;
+if duplicates exist, the oldest is designated and the rest require a deliberate
+manual reconciliation. The designated project cannot be archived.
+
 Manual equivalent:
 
 ```bash
@@ -29,7 +35,7 @@ make api        # http://localhost:8000, docs at /api/docs
 make web        # http://localhost:5173
 ```
 
-Local defaults use SQLite (`backend/standup.db`) and `AUTH_MODE=dev`. The identity switcher in the SPA is available only in dev mode.
+Local defaults use SQLite (`backend/standup.db`) and `AUTH_MODE=dev`. The app opens as Maya Chen (`manager@nex.local`); there is no identity switcher in the UI. Automated browser tests override the dev identity by setting the `nex.standup.devUser` local-storage key before loading a page.
 
 Useful commands:
 
@@ -71,8 +77,8 @@ Backend settings are environment variables (see `backend/.env.example`).
 | `CORS_ORIGINS` | `http://localhost:5173` | comma-separated |
 | `API_PREFIX` | `/api/v1` | |
 | `AI_PROVIDER` | `mock` | `mock` or `bedrock` |
-| `AI_PROCESSING_INLINE` | `true` | false → SQS worker |
-| `SQS_QUEUE_URL` | empty | worker queue; set by Terraform |
+| `AI_PROCESSING_INLINE` | `true` | retained setting; transcript processing is retired |
+| `SQS_QUEUE_URL` | empty | retained queue; event source disabled |
 | `BEDROCK_REGION` / `BEDROCK_MODEL_ID` | `us-east-1` / Claude 3.5 Sonnet | |
 | `TRANSCRIPT_BUCKET` | empty | empty → local filesystem |
 | `TRANSCRIPT_LOCAL_DIR` | `.transcripts` | dev fallback |
@@ -80,9 +86,7 @@ Backend settings are environment variables (see `backend/.env.example`).
 | `UPCOMING_DUE_DAYS` | 3 | “active” due-date window |
 | `AUTO_INIT_DB` | false | production must use Alembic |
 
-Frontend: `VITE_API_BASE` (default `/api/v1`) and `VITE_ENABLE_PILOT`
-(default false; true in local dev). Pilot tools are hidden from normal
-production builds.
+Frontend: `VITE_API_BASE` (default `/api/v1`). Pilot/feature toggles were removed.
 
 `GET /meta` exposes the server business date (UTC team day) used for due and
 overdue labels.
@@ -136,12 +140,12 @@ This creates:
 - VPC-attached RDS PostgreSQL (`db.t4g.micro` by default, encrypted, 7-day backups).
 - S3 transcript bucket (public access blocked, versioned, AES256, lifecycle expiry).
 - ECR repository for the backend image.
-- API Lambda + transcript worker Lambda (same image, different command).
+- API Lambda + retained worker Lambda (same image, different command; queue event source disabled by default).
 - SQS queue + DLQ, event source mapping capped at concurrency 2.
 - HTTP API Gateway with a `$default` proxy route.
 - CloudWatch log groups plus Lambda error and RDS CPU alarms.
 
-The reference stack assumes the existing nex VPC provides outbound access (NAT) or VPC endpoints for S3, SQS and Bedrock. If it does not, add interface/gateway endpoints before enabling transcript upload.
+The reference stack assumes the existing nex VPC provides outbound access (NAT) or VPC endpoints for the retained S3/SQS/Bedrock resources. New transcript processing is retired, so no endpoint work is required to enable uploads.
 
 ### 4.2 Image
 
@@ -151,7 +155,7 @@ docker build --platform linux/amd64 -t "$API_IMAGE" backend
 docker push "$API_IMAGE"
 ```
 
-Set `api_image_uri` to that immutable tag and apply Terraform again. Both Lambdas use the same image; the worker overrides the command to `app.worker.handler`.
+Set `api_image_uri` to that immutable tag and apply Terraform again. Both Lambdas use the same image; the worker overrides the command to `app.worker.handler` but is not fed by SQS while `transcripts_processing_enabled = false`.
 
 ### 4.3 Frontend
 
@@ -162,12 +166,11 @@ VITE_API_BASE=https://<api-id>.execute-api.<region>.amazonaws.com/api/v1 npm run
 
 Publish `dist/` through the nex portal. If the SPA is same-origin with the API, leave `VITE_API_BASE=/api/v1`.
 
-### 4.4 AI
+### 4.4 Retained transcript data
 
-- Leave `AI_PROVIDER=mock` until extraction quality is validated with authorized sample transcripts.
-- Switch to `bedrock` and verify the model is enabled in the account/region.
-- Keep `AI_PROCESSING_INLINE=false` in deployed environments; the API enqueues and the worker processes.
-- If a job fails three times it lands in the DLQ; inspect the worker logs and reprocess the transcript.
+- Transcript review/upload and AI proposal application are retired from the active app.
+- Keep `transcripts_processing_enabled = false` (the default). The event source mapping is disabled and `app.worker.handler` ignores messages without deleting them.
+- Existing transcripts, proposals and audit records remain under the retention policy. Removing the retained S3/SQS/Lambda resources requires an explicit retention/cleanup approval.
 
 ---
 
@@ -179,7 +182,7 @@ The API Lambda opens a SQLAlchemy pool per execution environment. For a small te
 - Keep Lambda concurrency bounded (reserved concurrency) before growth.
 - If concurrency or connection errors appear (`too many connections`), introduce **RDS Proxy** — it is deliberately not part of the first MVP to avoid unnecessary infrastructure.
 
-Worker concurrency is capped at 2, batch size 1, so transcript jobs do not exhaust the DB pool.
+The retained worker is disabled for queue consumption; its concurrency/batch settings remain in Terraform for a future approved use.
 
 ---
 
@@ -187,9 +190,9 @@ Worker concurrency is capped at 2, batch size 1, so transcript jobs do not exhau
 
 - **Logs:** structured uvicorn/FastAPI logs in `/aws/lambda/nex-standup-<env>-api` and `-worker`. Request validation and domain errors are logged at WARN; unexpected DB errors at ERROR with stack traces.
 - **Alarms:** API Lambda `Errors >= 1` per 5 minutes and RDS CPU > 80% for 10 minutes. Wire `alarm_actions` to the team SNS topic.
-- **DLQ:** `nex-standup-<env>-transcripts-dlq`. Alert on `ApproximateNumberOfMessagesVisible > 0`.
+- **Retained DLQ:** `nex-standup-<env>-transcripts-dlq`. Messages are not processed or deleted by the retired worker; handle under the retention plan.
 - **Health:** `/health` (liveness) and `/health/ready` (DB `SELECT 1`).
-- **Audit:** every mutation is queryable via `/api/v1/audit`; AI proposal failures include `failure_reason`.
+- **Audit:** every mutation is queryable via `/api/v1/audit`; retained proposal failures include `failure_reason`.
 
 Recommended additional alarms for production: Lambda p95 duration, RDS free storage, RDS connections, API Gateway 5xx rate.
 
@@ -213,29 +216,12 @@ Transcripts can contain sensitive customer or employee information.
 - Retention is enforced by S3 lifecycle (`transcript_retention_days`). Align it with company policy.
 - Transcript text is also stored in PostgreSQL for evidence and duplicate detection; the database backup retention therefore matters.
 - S3 access is limited to the Lambda execution role.
-- Before enabling Bedrock in production, confirm the approved model/region, data-processing terms and whether transcript content may leave the VPC/region.
-- The AI can propose changes but cannot apply them; reviewer identity and timestamps are audited.
+- Retained transcript data remains subject to the approved data-processing terms and retention policy.
+- Retained proposal records keep reviewer identity and timestamps for audit.
 
 ---
 
 ## 9. Runbooks
-
-### Transcript stuck in `uploaded`
-
-1. Check SQS queue depth and worker Lambda errors.
-2. Verify the worker has VPC access to SQS, S3, Bedrock and RDS (NAT/endpoints/security groups).
-3. If the worker is unavailable, use `POST /ai/transcripts/{id}/reprocess` (runs inline in the API process) or re-drive the SQS message.
-4. Check `transcripts.error` and the `transcript.failed` audit event.
-
-### AI proposal apply returns 409
-
-Expected when the task changed after proposal generation. The proposal is persisted as `failed`; the task keeps the newer state. Re-evaluate:
-
-- Edit the proposal payload and approve it again (requires a fresh proposal/version), or
-- Reject/close it, or
-- Reprocess the transcript against current task state.
-
-Never bypass the check by editing the task's stored version.
 
 ### Duplicate standup session
 
@@ -287,11 +273,10 @@ The SPA shows the current version. Refresh and re-apply. This is intentional pro
 - [ ] Database password in Secrets Manager, not Terraform state/plain variables.
 - [ ] RDS not publicly accessible; security group only allows the Lambda SG.
 - [ ] S3 bucket public access blocked; lifecycle retention approved.
-- [ ] Bedrock model/region approved for transcript data.
+- [ ] Retained transcript/S3 retention terms remain approved.
 - [ ] CloudWatch alarms wired to the on-call SNS topic.
 - [ ] DLQ alarm configured.
 - [ ] Backups, restore drill and retention confirmed.
 - [ ] Admin role assignment process documented.
 - [ ] Audit access reviewed (managers see the full trail).
-- [ ] `VITE_ENABLE_PILOT` is false (or the pilot is explicitly approved).
 - [ ] AUTH_MODE=nex and dev identity controls are unavailable.

@@ -38,12 +38,15 @@ export interface Page<T> {
 
 export interface Project {
   id: string
+  public_id: string
   name: string
   description: string | null
   status: 'active' | 'paused' | 'completed' | 'archived'
+  system_key: string | null
   owner: UserBrief | null
   members: UserBrief[]
   task_counts: Partial<Record<TaskStatus, number>>
+  can_edit: boolean
   created_at: string
   updated_at: string
 }
@@ -52,7 +55,9 @@ export interface TaskUpdate {
   id: string
   task_id: string
   task_title: string | null
+  task_public_id: string | null
   progress: string
+  blocked_by: string | null
   next_steps: string | null
   source: UpdateSource
   author: UserBrief | null
@@ -107,16 +112,16 @@ export interface Decision {
 
 export interface Task {
   id: string
+  public_id: string
   project_id: string
   project_name: string | null
   title: string
   description: string | null
+  blocked_by: string | null
   assignee: UserBrief | null
   priority: Priority
   status: TaskStatus
   due_date: string | null
-  is_at_risk: boolean
-  at_risk_reason: string | null
   completed_at: string | null
   version: number
   created_at: string
@@ -125,6 +130,8 @@ export interface Task {
   is_overdue: boolean
   open_blocker_count: number
   open_action_item_count: number
+  /** Server-computed: may the current user change this task's status? */
+  can_move: boolean
   latest_update: TaskUpdate | null
 }
 
@@ -160,7 +167,7 @@ export interface TodaySession {
   participant_count: number
 }
 
-export type AttentionReason = 'blocker' | 'overdue' | 'at_risk' | 'follow_up'
+export type AttentionReason = 'blocker' | 'overdue' | 'follow_up'
 
 export interface AttentionIssue {
   kind: 'blocker' | 'action_item' | 'reason'
@@ -192,18 +199,29 @@ export interface AttentionItem {
   origin_session_date: string | null
 }
 
+export interface TodayTask extends Task {
+  reasons: string[]
+  open_blockers: Blocker[]
+  open_action_items: ActionItem[]
+}
+
 export interface TodayData {
   business_date: string
   session: TodaySession | null
   daily_update: DailyUpdate | null
-  attention: Page<AttentionItem>
-  current_work: Page<Task>
+  cutoff: string | null
+  cutoff_label: string
+  checkin: Page<TodayTask>
+  other_commitments: AttentionItem[]
+  recently_completed: Page<Task>
 }
 
 export interface SessionOutcomes {
   action_items: ActionItem[]
   unresolved_blockers: CarriedItem[]
   decisions: Decision[]
+  updates: TaskUpdate[]
+  blocked_tasks: Task[]
   updates_count: number
   participant_count: number
   reviewed_count: number
@@ -320,7 +338,6 @@ export interface UserHistory {
 export interface CarryForward {
   blockers: CarriedItem[]
   action_items: CarriedItem[]
-  at_risk_tasks: Task[]
   overdue_tasks: Task[]
 }
 
@@ -404,6 +421,14 @@ export interface AuditEvent {
 
 export const TASK_STATUSES: { value: TaskStatus; label: string }[] = [
   { value: 'backlog', label: 'Backlog' },
+  { value: 'todo', label: 'To Do' },
+  { value: 'in_progress', label: 'In Progress' },
+  { value: 'done', label: 'Done' },
+  { value: 'canceled', label: 'Canceled' },
+]
+
+/** Visible workflow choices. Backlog is grouped into To Do in the UI. */
+export const TASK_STATUS_OPTIONS: { value: TaskStatus; label: string }[] = [
   { value: 'todo', label: 'To Do' },
   { value: 'in_progress', label: 'In Progress' },
   { value: 'done', label: 'Done' },

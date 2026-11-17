@@ -109,7 +109,7 @@ def team(db: Session) -> Team:
     at_risk = Task(
         project_id=project.id, title="At risk model", assignee_id=alice.id,
         status=TaskStatus.IN_PROGRESS, priority=Priority.HIGH, due_date=today + timedelta(days=4),
-        is_at_risk=True, at_risk_reason="Waiting on data access", created_by_id=manager.id,
+        created_by_id=manager.id,
     )
     backlog = Task(
         project_id=project.id, title="Backlog idea", assignee_id=alice.id,

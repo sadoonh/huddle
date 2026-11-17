@@ -44,8 +44,12 @@ def ensure_project_visible(user: User, project: Project) -> None:
     raise ForbiddenError("You do not have access to this project")
 
 
+def can_edit_project(user: User, project: Project) -> bool:
+    return is_manager(user) or project.owner_id == user.id
+
+
 def ensure_project_editable(user: User, project: Project) -> None:
-    if is_manager(user) or project.owner_id == user.id:
+    if can_edit_project(user, project):
         return
     raise ForbiddenError("Only project owners and managers can edit this project")
 
@@ -60,10 +64,19 @@ def ensure_task_visible(user: User, task: Task) -> None:
     raise ForbiddenError("You do not have access to this task")
 
 
-def ensure_task_editable(user: User, task: Task) -> None:
+def can_edit_task(user: User, task: Task) -> bool:
+    """True when the user may change this task's fields and status.
+
+    Mirrors ``ensure_task_editable`` so clients can disable actions instead of
+    discovering a 403 after the fact.
+    """
     if is_manager(user):
-        return
-    if task.assignee_id == user.id or task.created_by_id == user.id:
+        return True
+    return task.assignee_id == user.id or task.created_by_id == user.id
+
+
+def ensure_task_editable(user: User, task: Task) -> None:
+    if can_edit_task(user, task):
         return
     raise ForbiddenError("You can only edit tasks assigned to you or created by you")
 

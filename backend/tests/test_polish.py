@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import date
 
 from fastapi.testclient import TestClient
 
@@ -126,11 +126,6 @@ def test_note_idempotency_and_daily_update_reporting(client: TestClient, team, t
     second = client.post(f"/api/v1/standups/sessions/{sid}/notes", headers=team.auth("manager"), json=payload)
     assert first.status_code == 201
     assert first.json()["id"] == second.json()["id"]
-    captures = client.get(
-        f"/api/v1/standups/sessions/{sid}/captures", headers=team.auth("manager")
-    ).json()
-    assert len(captures["notes"]) == 1
-
     client.put(
         "/api/v1/daily-updates/today",
         headers=team.auth("alice"),
@@ -152,27 +147,22 @@ def test_note_idempotency_and_daily_update_reporting(client: TestClient, team, t
     assert alice["daily_update"]["next_steps"] == "Finish the task."
 
 
-def test_attention_contract_includes_issue_records_and_business_date(client: TestClient, team):
+def test_checkin_contract_includes_exception_context_and_business_date(client: TestClient, team):
+    update = client.patch(
+        f"/api/v1/tasks/{team.dashboard.id}",
+        headers=team.auth("manager"),
+        json={"blocked_by": "Warehouse access missing"},
+    )
+    assert update.status_code == 200
+
     body = client.get("/api/v1/today", headers=team.auth("manager")).json()
     assert body["business_date"] == date.today().isoformat()
-    dashboard = next(item for item in body["attention"]["items"] if item["task_id"] == team.dashboard.id)
-    assert dashboard["focus_id"] == team.open_blocker.id
-    assert dashboard["issues"][0]["kind"] == "blocker"
-    assert dashboard["issues"][0]["id"] == team.open_blocker.id
-    assert dashboard["reporter"]["id"] == team.manager.id
+    dashboard = next(item for item in body["checkin"]["items"] if item["id"] == team.dashboard.id)
+    assert "blocked" in dashboard["reasons"]
+    assert dashboard["is_blocked"] is True
+    # Legacy blocker rows remain stored but no longer populate active arrays.
+    assert dashboard["open_blockers"] == []
+    assert dashboard["open_action_items"] == []
+    assert dashboard["open_blocker_count"] == 0
 
 
-def test_standup_history_date_filter(client: TestClient, team, previous_standup):
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
-    included = client.get(
-        "/api/v1/standups/sessions",
-        headers=team.auth("manager"),
-        params={"start": yesterday, "end": yesterday},
-    ).json()
-    assert included["total"] == 1
-    excluded = client.get(
-        "/api/v1/standups/sessions",
-        headers=team.auth("manager"),
-        params={"start": date.today().isoformat()},
-    ).json()
-    assert excluded["total"] == 0

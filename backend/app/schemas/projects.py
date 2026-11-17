@@ -26,12 +26,15 @@ class ProjectPatch(ORMModel):
 
 class ProjectOut(ORMModel):
     id: str
+    public_id: str
     name: str
     description: str | None
     status: ProjectStatus
+    system_key: str | None = None
     owner: UserBrief | None
     members: list[UserBrief] = Field(default_factory=list)
     task_counts: dict[str, int] = Field(default_factory=dict)
+    can_edit: bool = False
     created_at: datetime
     updated_at: datetime
 

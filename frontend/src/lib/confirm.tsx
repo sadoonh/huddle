@@ -64,9 +64,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
           </>
         }
       >
-        <p className="text-sm text-slate-600">
-          This action cannot be completed until you choose whether to continue.
-        </p>
+        {null}
       </Modal>
     </ConfirmContext.Provider>
   )

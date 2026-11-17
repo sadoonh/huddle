@@ -78,6 +78,8 @@ def seed(reset: bool = False) -> None:
         db.flush()
 
         # -- Projects ------------------------------------------------------
+        # Stable Ad hoc project (provisioned idempotently, never name-matched again).
+        ad_hoc = project_service.ensure_ad_hoc_project(db)
         revenue = project_service.create_project(
             db,
             manager,
@@ -126,9 +128,8 @@ def seed(reset: bool = False) -> None:
             status=TaskStatus.TODO,
             priority=Priority.MEDIUM,
             due_in: int | None = None,
-            at_risk: bool = False,
-            reason: str | None = None,
             description: str | None = None,
+            blocked_by: str | None = None,
         ) -> Task:
             created = create_task(
                 db,
@@ -137,6 +138,7 @@ def seed(reset: bool = False) -> None:
                     project_id=project.id,
                     title=title,
                     description=description,
+                    blocked_by=blocked_by,
                     assignee_id=assignee.id,
                     priority=priority,
                     status=TaskStatus.TODO,
@@ -146,9 +148,6 @@ def seed(reset: bool = False) -> None:
             changes = {}
             if status != TaskStatus.TODO:
                 changes["status"] = status
-            if at_risk:
-                changes["is_at_risk"] = True
-                changes["at_risk_reason"] = reason
             if changes:
                 patch_task(db, manager, created.id, TaskPatch(**changes))
             return created
@@ -170,29 +169,31 @@ def seed(reset: bool = False) -> None:
 
         churn_backfill = task(
             customer, "Churn feature backfill", sam, TaskStatus.IN_PROGRESS, Priority.HIGH, 3,
-            at_risk=True, reason="Backfill window overlaps the event schema migration.",
         )
         cohort_model = task(
             customer, "Cohort retention model", sam, TaskStatus.BACKLOG, Priority.MEDIUM, 10
         )
         event_migration = task(
             customer, "Event schema migration", jordan, TaskStatus.IN_PROGRESS, Priority.URGENT, -2,
-            at_risk=True, reason="Blocked on vendor API credentials and already past due.",
+            blocked_by="Waiting on the vendor API key from procurement.",
         )
         segment_api = task(
             customer, "Segment export API", jordan, TaskStatus.TODO, Priority.MEDIUM, None
         )
+        task(
+            ad_hoc, "Unplanned ad hoc analysis", dana, TaskStatus.IN_PROGRESS, Priority.MEDIUM, 2,
+            description="A quick request that does not belong to a named initiative.",
+        )
 
         attribution_v2 = task(
             marketing, "Attribution model v2", priya, TaskStatus.IN_PROGRESS, Priority.HIGH, 4,
-            at_risk=True, reason="Waiting on warehouse access to the marketing schema.",
         )
         channel_ingest = task(
             marketing, "Channel spend ingest", priya, TaskStatus.TODO, Priority.MEDIUM, 6
         )
         taxonomy = task(
             marketing, "Campaign taxonomy cleanup", dana, TaskStatus.IN_PROGRESS, Priority.MEDIUM, -1,
-            at_risk=True, reason="Taxonomy sign-off pending with the marketing team.",
+            blocked_by="Taxonomy sign-off pending with the marketing team.",
         )
         looker_dashboard = task(
             marketing, "Looker attribution dashboard", dana, TaskStatus.TODO, Priority.HIGH, 2
@@ -320,7 +321,7 @@ def seed(reset: bool = False) -> None:
         db.commit()
         print("Seed complete.")
         print("  users:    manager@nex.local (Maya), priya@, jordan@, sam@, dana@")
-        print(f"  projects: {revenue.name}, {customer.name}, {marketing.name}, {quality.name}")
+        print(f"  projects: {ad_hoc.name}, {revenue.name}, {customer.name}, {marketing.name}, {quality.name}")
         print(f"  sessions: {', '.join(s.session_date.isoformat() for s in sessions)}")
         print("  open carry-forward: warehouse access (3d), vendor API key (2d), taxonomy sign-off (1d)")
         print("  no session exists for today yet — open the app as manager to start it.")
@@ -573,7 +574,7 @@ def _complete(db, manager: User, session_id: str, participants: list[User]) -> N
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Seed the nex standup workspace")
+    parser = argparse.ArgumentParser(description="Seed the nex Huddle workspace")
     parser.add_argument("--reset", action="store_true", help="drop and rebuild all tables")
     args = parser.parse_args()
     seed(reset=args.reset)

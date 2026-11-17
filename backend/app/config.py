@@ -16,7 +16,7 @@ class Settings(BaseSettings):
         env_file=".env", env_file_encoding="utf-8", extra="ignore", case_sensitive=False
     )
 
-    app_name: str = "standup"
+    app_name: str = "huddle"
     environment: str = "local"
     auto_init_db: bool = False
 

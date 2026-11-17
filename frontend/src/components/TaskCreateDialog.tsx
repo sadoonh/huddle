@@ -1,13 +1,13 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api'
-import { useAction } from '../lib/hooks'
 import { useConfirm } from '../lib/confirm'
 import { useAuth } from '../lib/auth'
 import { useToast } from '../lib/toast'
-import type { Priority, Project, TaskStatus, User } from '../lib/types'
-import { PRIORITIES, TASK_STATUSES } from '../lib/types'
+import type { Priority, Project, Task, TaskStatus, User } from '../lib/types'
+import { PRIORITIES } from '../lib/types'
 import { Icon } from './icons'
-import { ErrorBox, Loading, Modal, Spinner } from './ui'
+import MorphSelect from './MorphSelect'
+import { AsyncActionButton, ErrorBox, Loading, Modal, Spinner } from './ui'
 
 export default function TaskCreateDialog({
   projects,
@@ -16,6 +16,7 @@ export default function TaskCreateDialog({
   projectsError = null,
   onRetryOptions,
   defaultProjectId,
+  defaultStatus = 'todo',
   onClose,
   onCreated,
 }: {
@@ -25,40 +26,44 @@ export default function TaskCreateDialog({
   projectsError?: string | null
   onRetryOptions?: () => void
   defaultProjectId?: string
+  /** Lane-specific initial status. Global New task defaults to To do. */
+  defaultStatus?: TaskStatus
   onClose: () => void
-  onCreated: () => void
+  onCreated: (task: Task) => void
 }) {
   const { me, isManager } = useAuth()
   const { push } = useToast()
   const confirm = useConfirm()
-  const { run, busy, error } = useAction()
   const [projectOptions, setProjectOptions] = useState(projects)
-  const initialProject = defaultProjectId || (projects.length === 1 ? projects[0].id : '')
+  const initialProject =
+    defaultProjectId ||
+    projects.find((project) => project.system_key === 'ad_hoc')?.id ||
+    (projects.length === 1 ? projects[0].id : '')
   const [form, setForm] = useState({
     project_id: initialProject,
     title: '',
     description: '',
+    blocked_by: '',
     assignee_id: isManager ? '' : me?.id ?? '',
     priority: 'medium' as Priority,
-    status: 'todo' as TaskStatus,
-    due_date: '',
+    status: defaultStatus,
   })
-  const [showDetails, setShowDetails] = useState(false)
   const [showCreateProject, setShowCreateProject] = useState(false)
   const [projectName, setProjectName] = useState('')
   const [projectError, setProjectError] = useState<string | null>(null)
   const [creatingProject, setCreatingProject] = useState(false)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const [actionError, setActionError] = useState<string | null>(null)
   const [operationId] = useState(() => crypto.randomUUID())
   const initialOwner = isManager ? '' : me?.id ?? ''
-  const [initial] = useState({
+  const [initial, setInitial] = useState({
     projectId: initialProject,
     ownerId: initialOwner,
-    status: 'todo' as TaskStatus,
+    status: defaultStatus,
     priority: 'medium' as Priority,
   })
   const dirty =
-    Boolean(form.title.trim() || form.description.trim() || form.due_date) ||
+    Boolean(form.title.trim() || form.description.trim() || form.blocked_by.trim()) ||
     form.project_id !== initial.projectId ||
     form.assignee_id !== initial.ownerId ||
     form.status !== initial.status ||
@@ -69,15 +74,41 @@ export default function TaskCreateDialog({
     [projectOptions, projects],
   )
 
+  // Projects can finish loading after the dialog opens (global New task).
+  useEffect(() => {
+    if (form.project_id) return
+    const fallback =
+      defaultProjectId ||
+      effectiveProjects.find((project) => project.system_key === 'ad_hoc')?.id ||
+      (effectiveProjects.length === 1 ? effectiveProjects[0].id : '')
+    if (fallback) {
+      setForm((current) => (current.project_id ? current : { ...current, project_id: fallback }))
+      setInitial((current) => ({ ...current, projectId: fallback }))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defaultProjectId, effectiveProjects.length])
+
+  const projectChoices = useMemo(
+    () => effectiveProjects.map((project) => ({ value: project.id, label: project.name })),
+    [effectiveProjects],
+  )
+
+  const ownerChoices = useMemo(
+    () => [
+      { value: '', label: 'Unassigned' },
+      ...users.map((user) => ({ value: user.id, label: user.full_name })),
+    ],
+    [users],
+  )
+
   async function requestClose() {
-    if (busy || creatingProject) {
+    if (creatingProject) {
       push('A save is in progress. Wait for it to finish.', 'info')
       return
     }
     if (dirty) {
       const discard = await confirm({
         title: 'Discard this draft task?',
-        description: 'Its fields have not been saved.',
         confirmLabel: 'Discard',
         cancelLabel: 'Keep editing',
         tone: 'danger',
@@ -108,28 +139,25 @@ export default function TaskCreateDialog({
     }
   }
 
-  async function create() {
+  async function createTask(): Promise<void> {
     const errors: Record<string, string> = {}
     if (!form.title.trim()) errors.title = 'Title is required.'
     if (!form.project_id) errors.project = 'Choose a project.'
     setFieldErrors(errors)
-    if (Object.keys(errors).length > 0) return
-    const created = await run(() =>
-      api.post('/tasks', {
-        project_id: form.project_id,
-        title: form.title.trim(),
-        description: form.description || null,
-        assignee_id: form.assignee_id || null,
-        priority: form.priority,
-        status: form.status,
-        due_date: form.due_date || null,
-        client_operation_id: operationId,
-      }),
-    )
-    if (created !== undefined) {
-      push('Task created.')
-      onCreated()
+    if (Object.keys(errors).length > 0) {
+      throw new Error(errors.title ?? errors.project)
     }
+    const task = await api.post<Task>('/tasks', {
+      project_id: form.project_id,
+      title: form.title.trim(),
+      description: form.description || null,
+      blocked_by: form.blocked_by.trim() || null,
+      assignee_id: form.assignee_id || null,
+      priority: form.priority,
+      status: form.status,
+      client_operation_id: operationId,
+    })
+    onCreated(task)
   }
 
   return (
@@ -137,18 +165,20 @@ export default function TaskCreateDialog({
       open
       onClose={requestClose}
       title="New task"
-      description="A short form. Add details only when they matter."
       footer={
         <>
-          <button type="button" className="btn btn-secondary" onClick={requestClose}>Cancel</button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={create}
-            disabled={busy || !form.title.trim() || !form.project_id}
-          >
-            {busy ? <Spinner /> : <Icon name="plus" />} Create task
+          <button type="button" className="btn btn-secondary" onClick={requestClose}>
+            Cancel
           </button>
+          <AsyncActionButton
+            label="Create task"
+            pendingLabel="Creating…"
+            successLabel="Created"
+            icon="plus"
+            onAction={createTask}
+            onError={(message) => setActionError(message)}
+            disabled={!form.title.trim() || !form.project_id || creatingProject}
+          />
         </>
       }
     >
@@ -158,45 +188,71 @@ export default function TaskCreateDialog({
         <ErrorBox message={projectsError} onRetry={onRetryOptions} />
       ) : (
         <div className="space-y-3">
-          {error && <p className="rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
+          {actionError && (
+            <p role="alert" className="rounded-md bg-danger-tint px-3 py-2 text-sm text-danger">
+              {actionError}
+            </p>
+          )}
           <div>
-            <label className="label" htmlFor="new-task-title">Title</label>
+            <label className="label" htmlFor="new-task-title">
+              Title <span className="text-danger">*</span>
+            </label>
             <input
               id="new-task-title"
+              data-autofocus
               className="input text-base"
               value={form.title}
               onChange={(event) => setForm({ ...form, title: event.target.value })}
               autoFocus
             />
-            {fieldErrors.title && <p className="mt-1 text-sm text-rose-700">{fieldErrors.title}</p>}
+            {fieldErrors.title && <p className="mt-1 text-sm text-danger">{fieldErrors.title}</p>}
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
-              <label className="label" htmlFor="new-task-project">Project</label>
+              <span className="label" id="new-task-project-label">
+                Project <span className="text-danger">*</span>
+              </span>
               {effectiveProjects.length === 0 ? (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                <div className="rounded-control border border-hairline bg-recessed p-3 text-sm text-ink-muted">
                   <p>No projects are available to you.</p>
                   {isManager ? (
                     <>
                       {!showCreateProject ? (
-                        <button type="button" className="btn btn-secondary btn-sm mt-2" onClick={() => setShowCreateProject(true)}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm mt-2"
+                          onClick={() => setShowCreateProject(true)}
+                        >
                           <Icon name="plus" /> Create project
                         </button>
                       ) : (
                         <div className="mt-2 space-y-2">
+                          <label className="label" htmlFor="new-task-project-name">
+                            Project name <span className="text-danger">*</span>
+                          </label>
                           <input
+                            id="new-task-project-name"
                             className="input"
                             placeholder="Project name"
                             value={projectName}
                             onChange={(event) => setProjectName(event.target.value)}
                           />
-                          {projectError && <p className="text-sm text-rose-700">{projectError}</p>}
+                          {projectError && <p className="text-sm text-danger">{projectError}</p>}
                           <div className="flex gap-2">
-                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowCreateProject(false)}>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => setShowCreateProject(false)}
+                            >
                               Cancel
                             </button>
-                            <button type="button" className="btn btn-primary btn-sm" onClick={createProject} disabled={creatingProject || !projectName.trim()}>
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-sm"
+                              onClick={createProject}
+                              disabled={creatingProject || !projectName.trim()}
+                            >
                               {creatingProject ? <Spinner /> : null} Create project
                             </button>
                           </div>
@@ -204,35 +260,53 @@ export default function TaskCreateDialog({
                       )}
                     </>
                   ) : (
-                    <p className="mt-1 text-xs text-slate-500">Ask a manager to create a project and add you to it.</p>
+                    <p className="mt-1 text-xs text-ink-subtle">Ask a manager to create a project and add you to it.</p>
                   )}
                 </div>
               ) : (
-                <select
-                  id="new-task-project"
-                  className="select"
+                <MorphSelect
                   value={form.project_id}
-                  onChange={(event) => setForm({ ...form, project_id: event.target.value })}
-                >
-                  <option value="">Select a project…</option>
-                  {effectiveProjects.map((project) => (
-                    <option key={project.id} value={project.id}>{project.name}</option>
-                  ))}
-                </select>
+                  options={projectChoices}
+                  onChange={(value) => setForm({ ...form, project_id: value })}
+                  label="Project"
+                  placeholder="Select a project…"
+                  searchable
+                  searchPlaceholder="Search projects…"
+                />
               )}
-              {fieldErrors.project && <p className="mt-1 text-sm text-rose-700">{fieldErrors.project}</p>}
+              {fieldErrors.project && <p className="mt-1 text-sm text-danger">{fieldErrors.project}</p>}
               {isManager && effectiveProjects.length > 0 && !showCreateProject && (
-                <button type="button" className="mt-1 text-sm font-medium text-emerald-700 hover:underline" onClick={() => setShowCreateProject(true)}>
-                  Create another project
+                <button
+                  type="button"
+                  className="mt-1 text-sm font-medium text-accent hover:underline"
+                  onClick={() => setShowCreateProject(true)}
+                >
+                  Create new project
                 </button>
               )}
               {showCreateProject && effectiveProjects.length > 0 && (
-                <div className="mt-2 space-y-2 rounded-lg border border-slate-200 p-2">
-                  <input className="input" placeholder="Project name" value={projectName} onChange={(event) => setProjectName(event.target.value)} />
-                  {projectError && <p className="text-sm text-rose-700">{projectError}</p>}
+                <div className="mt-2 space-y-2 rounded-control border border-hairline p-2">
+                  <label className="label" htmlFor="new-task-project-name">
+                    Project name <span className="text-danger">*</span>
+                  </label>
+                  <input
+                    id="new-task-project-name"
+                    className="input"
+                    placeholder="Project name"
+                    value={projectName}
+                    onChange={(event) => setProjectName(event.target.value)}
+                  />
+                  {projectError && <p className="text-sm text-danger">{projectError}</p>}
                   <div className="flex gap-2">
-                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowCreateProject(false)}>Cancel</button>
-                    <button type="button" className="btn btn-primary btn-sm" onClick={createProject} disabled={creatingProject || !projectName.trim()}>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowCreateProject(false)}>
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={createProject}
+                      disabled={creatingProject || !projectName.trim()}
+                    >
                       {creatingProject ? <Spinner /> : null} Create
                     </button>
                   </div>
@@ -240,25 +314,27 @@ export default function TaskCreateDialog({
               )}
             </div>
             <div>
-              <label className="label" htmlFor="new-task-owner">Owner</label>
-              <select
-                id="new-task-owner"
-                className="select"
+              <span className="label" id="new-task-owner-label">
+                Owner
+              </span>
+              <MorphSelect
                 value={form.assignee_id}
-                onChange={(event) => setForm({ ...form, assignee_id: event.target.value })}
-              >
-                <option value="">Unassigned</option>
-                {users.map((user) => (
-                  <option key={user.id} value={user.id}>{user.full_name}</option>
-                ))}
-              </select>
+                options={ownerChoices}
+                onChange={(value) => setForm({ ...form, assignee_id: value })}
+                label="Owner"
+                placeholder="Unassigned"
+                searchable
+                searchPlaceholder="Search people…"
+                avatar
+              />
             </div>
           </div>
 
-          {showDetails ? (
-            <div className="space-y-3 border-t border-slate-100 pt-3">
+          <div className="space-y-3 border-t border-hairline pt-3">
               <div>
-                <label className="label" htmlFor="new-task-description">Description</label>
+                <label className="label" htmlFor="new-task-description">
+                  Description
+                </label>
                 <textarea
                   id="new-task-description"
                   className="textarea"
@@ -266,34 +342,55 @@ export default function TaskCreateDialog({
                   onChange={(event) => setForm({ ...form, description: event.target.value })}
                 />
               </div>
-              <div className="grid gap-3 sm:grid-cols-3">
+              <div>
+                <label className="label" htmlFor="new-task-blocked">
+                  Blocked by (optional)
+                </label>
+                <input
+                  id="new-task-blocked"
+                  className="input"
+                  value={form.blocked_by}
+                  onChange={(event) => setForm({ ...form, blocked_by: event.target.value })}
+                  placeholder="Leave empty when nothing is blocking this task."
+                />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="label" htmlFor="new-task-due">Due date</label>
-                  <input id="new-task-due" type="date" className="input" value={form.due_date} onChange={(event) => setForm({ ...form, due_date: event.target.value })} />
-                </div>
-                <div>
-                  <label className="label" htmlFor="new-task-priority">Priority</label>
-                  <select id="new-task-priority" className="select" value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value as Priority })}>
+                  <label className="label" htmlFor="new-task-priority">
+                    Priority
+                  </label>
+                  <select
+                    id="new-task-priority"
+                    className="select"
+                    value={form.priority}
+                    onChange={(event) => setForm({ ...form, priority: event.target.value as Priority })}
+                  >
                     {PRIORITIES.map((priority) => (
-                      <option key={priority.value} value={priority.value}>{priority.label}</option>
+                      <option key={priority.value} value={priority.value}>
+                        {priority.label}
+                      </option>
                     ))}
                   </select>
                 </div>
                 <div>
-                  <label className="label" htmlFor="new-task-status">Status</label>
-                  <select id="new-task-status" className="select" value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as TaskStatus })}>
-                    {TASK_STATUSES.filter((status) => status.value !== 'done').map((status) => (
-                      <option key={status.value} value={status.value}>{status.label}</option>
+                  <label className="label" htmlFor="new-task-status">
+                    Status
+                  </label>
+                  <select
+                    id="new-task-status"
+                    className="select"
+                    value={form.status}
+                    onChange={(event) => setForm({ ...form, status: event.target.value as TaskStatus })}
+                  >
+                    {(['todo', 'in_progress'] as TaskStatus[]).map((status) => (
+                      <option key={status} value={status}>
+                        {status === 'in_progress' ? 'In Progress' : 'To Do'}
+                      </option>
                     ))}
                   </select>
                 </div>
               </div>
             </div>
-          ) : (
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowDetails(true)}>
-              <Icon name="plus" /> Add details (description, due date, priority, status)
-            </button>
-          )}
         </div>
       )}
     </Modal>

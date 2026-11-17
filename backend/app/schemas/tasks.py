@@ -31,8 +31,8 @@ class TaskCreate(ORMModel):
     priority: Priority = Priority.MEDIUM
     status: TaskStatus = TaskStatus.TODO
     due_date: date | None = None
-    is_at_risk: bool = False
-    at_risk_reason: str | None = None
+    # Free-text "Blocked by" note; blank/whitespace is stored as NULL.
+    blocked_by: str | None = None
 
 
 class TaskPatch(ORMModel):
@@ -43,8 +43,8 @@ class TaskPatch(ORMModel):
     priority: Priority | None = None
     status: TaskStatus | None = None
     due_date: date | None = None
-    is_at_risk: bool | None = None
-    at_risk_reason: str | None = None
+    # Omitted = unchanged; explicit null/blank = clear.
+    blocked_by: str | None = None
     # Optimistic concurrency: when supplied and stale the API returns 409.
     expected_version: int | None = None
 
@@ -64,10 +64,18 @@ class TaskUpdateCreate(ORMModel):
     client_operation_id: str | None = Field(default=None, max_length=64)
 
 
+class TaskUpdatePatch(ORMModel):
+    progress: str = Field(min_length=1)
+    # Omitted preserves the existing value; explicit null/blank clears it.
+    next_steps: str | None = None
+    expected_version: int | None = None
+
+
 class TaskUpdateOut(ORMModel):
     id: str
     task_id: str
     task_title: str | None = None
+    task_public_id: str | None = None
     progress: str
     next_steps: str | None
     source: UpdateSource
@@ -160,6 +168,7 @@ class DecisionOut(ORMModel):
 
 class TaskOut(ORMModel):
     id: str
+    public_id: str
     project_id: str
     project_name: str | None = None
     title: str
@@ -168,8 +177,7 @@ class TaskOut(ORMModel):
     priority: Priority
     status: TaskStatus
     due_date: date | None
-    is_at_risk: bool
-    at_risk_reason: str | None
+    blocked_by: str | None = None
     completed_at: datetime | None
     version: int
     created_at: datetime
@@ -178,6 +186,8 @@ class TaskOut(ORMModel):
     is_overdue: bool = False
     open_blocker_count: int = 0
     open_action_item_count: int = 0
+    # Server-computed capability: may the current user change status/move this task?
+    can_move: bool = False
     latest_update: TaskUpdateOut | None = None
 
 

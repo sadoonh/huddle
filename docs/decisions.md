@@ -80,7 +80,7 @@ Short ADR-style notes for the choices that shape the MVP. Each entry states cont
 
 **Context:** The application is hosted inside nex. A second login or a separate Cognito user pool would fragment identity.
 
-**Decision:** Trust SSO headers injected by the nex gateway (`AUTH_MODE=nex`). Provision users on first sight; use header roles only to elevate. Local development uses a dev identity switch.
+**Decision:** Trust SSO headers injected by the nex gateway (`AUTH_MODE=nex`). Provision users on first sight; use header roles only to elevate. Local development signs in as a fixed demo identity (Maya Chen) with no in-app switcher; automated tests may override the dev header identity via local storage.
 
 **Consequences:** The gateway must strip client-supplied identity headers — a documented operational requirement. Authorization remains application-level (RBAC + project/task checks), so the API does not rely on the portal for permissions. If nex later exposes JWT verification, the auth dependency can be swapped without touching services.
 
@@ -161,6 +161,8 @@ Short ADR-style notes for the choices that shape the MVP. Each entry states cont
 
 ## ADR-015 — Simplify to Today + Work and a focused meeting
 
+**Superseded in part by ADR-017:** Work is a Kanban board again. The rest of this decision (Today, focused standup, pilot gating) still stands.
+
 **Context:** The first implementation exposed seven equal navigation destinations, a three-panel meeting screen, duplicate status/complete/review indicators, an overview-style home, and several peripheral workflows. The product review found that users had to understand the application's organization before doing their work. There was no usage evidence that intake, Kanban, or transcript processing should be removed outright, so the decision was to simplify the default experience while preserving data and pilot access.
 
 **Decision:**
@@ -205,7 +207,7 @@ Short ADR-style notes for the choices that shape the MVP. Each entry states cont
 8. **URL-backed Work.** Active/Completed/All scope, search, filters, pagination and the selected task live in the URL; filter chips are removable and empty states distinguish search, filters, no active work and no work.
 9. **One accessible overlay.** Portal rendering, labelled dialogs, focus trap, inert background, scroll lock, topmost-only Escape, focus restoration and mobile full-height surfaces are shared by modals, drawers and confirmations.
 10. **One day boundary.** The server UTC date is the team business date (`/meta`, `/today`); the UI uses it for due/overdue and daily updates. Closed historical tasks show dates, not “overdue”.
-11. **Production presentation.** Compact header navigation replaces the sidebar. Pilot tools, legacy board and development identity switching are absent from normal production builds unless explicitly configured (`VITE_ENABLE_PILOT` / `AUTH_MODE=dev`).
+11. **Production presentation.** Compact header navigation replaces the sidebar. Pilot tools, legacy board and development identity overrides are absent from normal production builds unless explicitly configured (`VITE_ENABLE_PILOT` / `AUTH_MODE=dev`).
 
 **Consequences:**
 
@@ -216,3 +218,187 @@ Short ADR-style notes for the choices that shape the MVP. Each entry states cont
 - Screen-reader and 200% zoom validation remain manual pilot tasks, as does real-user testing.
 
 **Status:** Implemented in the current codebase; frontend automation and formal accessibility audit are follow-ups, not claims of completion.
+
+
+---
+
+## ADR-017 — Work is the Kanban board; the component surface is elevated
+
+**Superseded in part by ADR-019:** Work is now Tasks with Board and Table; the component family, brand and reliability rules remain.
+
+**Context:** The simplification pass removed the board from the default experience and made Work a filtered list. A follow-up design review found the product structure right but the components still looked like default forms and bordered rows. The team also wanted the board’s cross-lane workflow back, without the legacy board’s five-column, 200-task, native-drag implementation.
+
+**Decision:**
+
+1. **Work is Kanban.** Four default lanes (Backlog, To do, In progress, Done), with Canceled reachable through **Show canceled** and **Cancel task**. Database statuses are unchanged; blocked/at-risk stay independent conditions rather than columns. This supersedes the list-first recommendation in `docs/simplification-plan.md`; ADR-015 remains the record of that earlier decision.
+2. **Per-lane data, honest totals.** Each lane fetches its own filtered status page (`limit`/`offset`, 20 cards initially) with stable server sorting (`due_date` nulls-last, `updated_at`, `id`). A failing or slow lane never blanks the board; totals always come from the server count rather than the loaded slice.
+3. **Movement is a status mutation.** Pointer drag (6px activation threshold, mouse only for this release), a keyboard lift/move/drop handle, and **Move to…** all submit the existing `/tasks/{id}/status` call with `expected_version`. Optimistic placement is reconciled on rejection; `409` loads the current task and explains the conflict instead of forcing the stale move. Same-lane dragging is a no-op because the model has no persisted rank.
+4. **Server-computed capability.** `TaskOut.can_move` mirrors `ensure_task_editable` so read-only tasks render without move affordances instead of discovering a 403.
+5. **One action snackbar.** The existing toast stack gained one optional action; board moves offer **Undo**, which performs a real version-checked reverse mutation and refuses to overwrite newer changes.
+6. **A shared component family.** Raised task cards, recessed lanes, a morphed picker (portal, collision handling, keyboard/typeahead), a segmented control with announced selection, a confirmed-result async button, a stroke-drawn completion control, a right-side detail sheet, and the existing accessible overlays are used across Work, Today, the focused standup, and outcomes. Motion is event-driven, short, and removed under `prefers-reduced-motion`; reduced motion keeps all state feedback.
+7. **URL contract.** Scope, project, owner, priority, exceptions, status filter, canceled column, selected task, and mobile lane are URL state. Legacy `view`/`completed`/`page` parameters are translated on load, and `/board` keeps redirecting to Work with its project context.
+8. **Legacy board stays a pilot tool.** `/legacy/board` is retained for comparison only and is not part of normal navigation; it is not a second Work board.
+
+**Consequences:**
+
+- The board needs one small server contract addition (`can_move`) and a deterministic sort tie-breaker; no new tables or migrations.
+- Rank ordering, touch drag, and server-side board snapshots remain explicit follow-ups.
+- Task detail is now a sheet, but its business logic, draft protection, and conflict handling are the same shared implementation.
+- The browser smoke test covers menu/keyboard/undo moves and the narrow single-lane layout; the later Tasks/Projects screenshots live in `docs/screenshots/tasks-*.png`.
+
+**Status:** Implemented; pilot validation of drag, keyboard, and reduced-motion experiences is pending.
+
+
+---
+
+## ADR-018 — Extend the nex Charcoal Neutral brand from the parent portal
+
+**Context:** The app is launched from the nex portal but used a standalone emerald/stone palette, a check-mark logo and Inter typography. The parent portal's approved Charcoal Neutral v1.2 kit defines the shared identity: charcoal header, Signal Teal wordmark accent, Action Teal interactions on white, Manrope headings and DM Sans UI text. The app should look like the same product family on first paint.
+
+**Decision:**
+
+1. **Adopt the kit's tokens, not a lookalike.** `docs/brand-kit/` holds the supplied identity, palette, tokens and wordmarks. Semantic app tokens in `tailwind.config.js` / `index.css` use the kit values: Canvas `#F6F7F8`, White surfaces, Ink `#252A31`, Secondary `#66717C`, Light Border `#E1E5E9`, Whisper Teal `#EAF7F4`, Action Teal `#087F77`, Signal Teal `#38D9C5`, Charcoal `#292D34`/`#363B43`/`#454B53`.
+2. **Charcoal app header.** The header uses the portal's 105° charcoal gradient, dark border, subtle teal radial/ring decoration, and light-on-charcoal navigation. It keeps the portal's identity at app scale: a 72px desktop / 61px mobile minimum height (20% shorter than the portal's 90/76 homepage header) and the Space Grotesk `nex` wordmark (white `ne` + Signal Teal `x`). Reading pages keep their narrow content width while the header stays brand-wide, matching the portal's header/catalog relationship. Header menus and pickers render above the header without clipping.
+3. **Contrast rules are enforced.** Action Teal is used for links, focus and primary buttons on white. Signal Teal is reserved for charcoal surfaces and brand highlights; it is never used as text on white. Semantic danger/warning ramps stay independent so status meaning is not lost in the brand palette.
+4. **Typography.** Manrope ExtraBold for headings, DM Sans for body, controls and metadata, Space Grotesk for the wordmark. Fonts load from Google Fonts with system fallbacks; no display font is introduced beyond the kit.
+5. **Surfaces and shape.** Card radius 16px, control radius 11px, sheet radius 18px, neutral-first borders and soft shadows, `0.24s`-family settle motion with the existing `prefers-reduced-motion` override. Task cards keep the restrained 1px hover lift from ADR-017; the brand's -3px tool-card lift is for the portal catalog, not dense board cards.
+6. **Legacy utilities inherit the theme.** The Tailwind `slate`, `emerald`, `sky`, `indigo`, `rose` and `amber` ramps are remapped to brand-derived neutrals, teals and semantic brick/amber. Older pilot screens therefore inherit the palette without duplicating every component, while new work uses the semantic tokens (`canvas`, `raised`, `hairline`, `accent`, `ink`).
+7. **Fixed local identity until Cognito.** There is no in-app identity switcher. Local development signs in as Maya Chen (`manager@nex.local`); automated tests may override the dev identity through local storage. Production identity will come from nex SSO/Cognito.
+8. **Interaction semantics do not change.** ADR-016's trust model and ADR-017's Kanban/component family remain authoritative; this decision changes visual identity, not authorization, versioning, URL state or overlay behavior.
+
+**Consequences:**
+
+- The app now depends on Google Fonts at runtime; system stacks keep it functional offline. Self-hosting Manrope/DM Sans/Space Grotesk is a follow-up if the portal forbids external font requests.
+- Local development has one fixed identity (Maya Chen) until Cognito is wired in; employee flows remain covered by automated tests that override the dev header identity out of band.
+- Brand changes are centralized in tokens and the header; pilot pages pick them up via the remapped utility palettes.
+- Screenshots and the Playwright smoke run were regenerated against the branded shell; header identity controls and board selectors remain stable for automation.
+
+**Status:** Implemented; formal brand contrast/typography sign-off and self-hosted fonts remain follow-ups.
+
+
+---
+
+## ADR-019 — Today, Tasks and Projects; retire the pilot surfaces
+
+**Superseded in part by ADR-020:** the Tasks-led shell, unified To Do category and ephemeral standup replace the Today/outcomes navigation. **Superseded in part by ADR-021:** Projects is a filter/create inside Tasks, not a primary destination.
+
+**Context:** Earlier decisions split the product into Today + Work, then restored Kanban as Work and kept intake, transcript review and the legacy board behind Pilot tools. A further review found the navigation still described an internal experiment rather than the team’s task application: Work was imprecise, Projects was buried, Today was a dashboard-like stack, the board and list were separate experiences, and retired products remained reachable through a build flag.
+
+**Decision:**
+
+1. **Three destinations:** Today, Tasks and Projects. “Work” is renamed to Tasks in routes, labels and copy. Reading pages keep their narrow width; Tasks keeps the wide board/table layout.
+2. **Tasks is one workspace with two presentations.** A URL-backed board/table switch (`/tasks?layout=board|table`) shares one filter model, task detail and mutation services. The last presentation is remembered per user. Table uses server pagination and sorting over the full filtered set; board keeps independent lane paging.
+3. **One Filters surface.** Project, owner (including Assigned to me), status, priority, exceptions and one Include-canceled control are draft-only until Apply. Chips remove criteria; Clear filters preserves layout, search and selection. The standalone project dropdown and Project settings action are removed.
+4. **Today is a pre-meeting check-in table.** The server defines relevance and the change boundary (previous completed standup end, else start of the business day), returns paginated task rows with exception context, and a secondary table for taskless/closed-task commitments. Inline note+status saves reuse the atomic update operation. General notes remain optional and distinct. Recently completed work is a disclosure, not a default list.
+5. **Projects is a primary destination.** Searchable project table, authorized/viewer-scoped counts, project detail with owner/member permissions, and View tasks that preserves the chosen presentation.
+6. **Ad hoc is a real, idempotently provisioned project.** It is identified by `system_key = 'ad_hoc'` (migration), not repeated name matching. A single legacy project literally named “Ad hoc” is adopted once; duplicates require deliberate reconciliation. The designated project cannot be archived; membership reconciles active users; task authorization remains per-task.
+7. **The account control is a real menu.** Name/email/role and authentication context, keyboard navigation, Escape/outside dismissal and focus return. No identity switcher, fake sign-out, notifications or preferences.
+8. **Retire the pilot surfaces from the active product.** Intake, transcript review, the legacy board and the Pilot tools menu are removed: routes/components are not registered, `/ai` and `/intake` show a retired notice, old board URLs redirect to Tasks Board, AI/intake API routers are unregistered, the transcript event source mapping is disabled by default and the worker ignores messages. Historical records and migrations are retained; no automatic conversion or data deletion.
+9. **Fixed local identity until Cognito.** Local development opens as Maya Chen; production identity comes from nex SSO. Browser tests may override the dev header identity out of band via local storage.
+
+**Supersedes:** the navigation/list/pilot parts of ADR-015 (“Work” as a list, pilot tools) and ADR-017 (“Work is Kanban”, retain legacy board as fallback). ADR-016 trust behavior and ADR-018 brand remain in force. The domain rule that blockers are independent of status (ADR-004) and optimistic concurrency remain unchanged.
+
+**Consequences:**
+
+- Old URLs are normalized/redirected; shared links and browser history continue to work.
+- Ad hoc requires a nullable `projects.system_key` migration; startup and Projects reads provision it lazily with savepoint-protected races.
+- Retained S3/SQS/Lambda resources still exist in Terraform; retirement requires a separate approved cleanup. No destructive apply is part of this change.
+- Manual board rank, touch drag and Cognito/SSO integration remain explicit follow-ups.
+- Tests and screenshots move to Today/Tasks/Projects; the browser smoke covers the new shell, filter parity, inline editing, Ad hoc, Projects, standups, retired routes and narrow layouts.
+
+**Status:** Implemented; pilot validation and formal accessibility review remain.
+
+
+---
+
+## ADR-020 — Tasks-led shell, unified To Do, and an ephemeral standup
+
+**Context:** After the Today/Tasks/Projects handoff, the team found the extra Today destination and the historical standup surface heavier than the daily job. The board also exposed Backlog and To Do as separate columns even though the team treats them as one queue, and the standup entry points had several labels (Start/Resume/View outcomes) and a history/outcomes page.
+
+**Decision:**
+
+1. **Two primary destinations:** Tasks and Projects. `/` redirects to `/tasks`; there is no Today page or navigation item.
+2. **One unified To Do category.** The UI groups stored `backlog` and `todo` tasks under a single gray **To Do** lane/status. Backlog remains a valid stored status for legacy data but has no separate lane, status option, or filter option. New tasks use To Do. Board lanes are To Do, In Progress, Done (plus Canceled on request). Table status choices are To Do, In Progress, Done, Canceled.
+3. **One Standup button.** The Tasks header has a single manager **Standup** button. It starts today’s session when none exists and otherwise opens the current session. There is no Start/Resume/New/View-outcomes copy. A completed session opens the same view read-only.
+4. **No past standups.** The standup list page, outcomes page, history/carry-forward UI and their API routes are removed. `/standups` and `/standups/:id` redirect to Tasks. Session detail/workspace and live capture endpoints remain for the active meeting; historical rows remain retained in the database/audit. Finishing returns directly to Tasks.
+5. **Fast in/out.** The standup header offers **Back to Tasks**; there is no global nav in focused mode. The manager can move between Tasks and the standup in one action. Leaving the standup is immediate; there is no leave-confirmation prompt.
+6. **Board/card polish.** The keyboard move handle moves out of the owner row so the owner avatar/name aligns with the task title and public ID. The update dialog labels its field **Add update**, uses the card font size for the status picker, and the async Save button no longer reserves an empty leading icon slot. Save update is enabled for progress or status; status-only saves use the version-checked task patch instead of an empty update. Blocked by is a task field edited in the Task card or task creation form, not on updates; the Table shows it read-only.
+7. **Updated tests/docs.** Browser and backend coverage follow the retained active surface; removed history endpoints are asserted inactive.
+
+**Consequences:**
+
+- Legacy backlog rows display as To Do and are included in To Do lane/table queries; submitting the same To Do state does not rewrite their stored status.
+- Historical session/outcome data is retained but not browsable through the product. Any export/reporting need requires a separate deliberate endpoint/design.
+- The focused standup remains manager-only; employees reach their work through Tasks.
+- Manual board rank, touch drag and Cognito integration remain deferred.
+
+**Status:** Implemented; validation still pending.
+
+
+---
+
+## ADR-021 — Projects is task context, not a destination
+
+**Context:** The Projects page duplicated the task workspace. Users reach project-scoped work through the Tasks project filter; the separate destination, detail drawer and member-management UI added navigation weight without a daily job. Team members still need to create projects and filter tasks by them, and project data remains an authorization boundary.
+
+**Decision:**
+
+1. **Remove the Projects destination.** Delete the Projects page, project detail, member-management UI and the primary navigation item. Keep the app header/navigation bar structure with the Tasks slot so a future page can be added without rebuilding the shell.
+2. **Keep project context in Tasks.** The existing Project filter continues to scope Board and Table queries and appears as a removable filter chip. `/projects` and `/settings/projects` redirect to `/tasks`.
+3. **Create projects from Tasks.** A small, manager-only **New project** button in the Tasks header opens a focused dialog for name, description, owner and members. Successful creation refreshes the filter options and offers a **Filter** action.
+4. **Retain the project entity and APIs.** Project list/create (and the existing retention of detail/edit endpoints) remain server-side for filtering, task creation, Ad hoc provisioning and future surfaces. No project or task data is deleted.
+5. **Keep Ad hoc.** The idempotently provisioned **Ad hoc** project remains the visible default for global task creation and a valid filter path.
+
+**Consequences:**
+
+- Navigation has one destination today; the nav bar is intentionally retained for future pages.
+- Project editing/member management has no active UI. Existing API contracts remain available until a future deliberate design change.
+- The manager-only create dialog is the only project mutation surface; employees see the project filter but not project creation.
+- Browser coverage replaces the old Projects detail/View tasks journey with project creation from Tasks and asserts no Projects heading/nav remains.
+
+**Status:** Implemented.
+
+---
+
+## ADR-022 — Standup density and task-creation context
+
+**Context:** The standup repeated owner and status on every task row even though the selected participant and group heading already supplied both. A separate “Current work” heading and a differently styled Done disclosure added visual noise. The Tasks owner filter also lacked one of the most common queues — unassigned work — and a Description entered during task creation was stored on a field with no active reading surface.
+
+**Decision:**
+
+1. **Unassigned owner filter.** The manager Owner filter includes **Unassigned**, represented with the same neutral dashed-person icon as unassigned task ownership. The API accepts `assignee_id=unassigned` and returns only tasks whose assignee is null.
+2. **Standup rows are contextual.** Remove the repeated owner/status line from every standup task row. The person selector identifies the owner; the In Progress / To Do / Blocked / Done group identifies the status.
+3. **Done matches the group pattern.** Done uses the same heading/count treatment and task-card list as the other groups, but starts collapsed. Expanding reveals completed work; nothing is hidden behind a separate “Current work” heading.
+4. **Description becomes the first update.** When a task is created with a Description, the backend also inserts a task update authored by the creator in the same transaction. It appears immediately in Latest update, task history and the standup. The task description field is retained for API clients, but the update is the active reading surface.
+5. **Helper copy.** The create dialog states that Description is saved as the first update.
+
+**Consequences:**
+
+- The owner filter can produce an empty result without implying an error; the empty state is the normal “No tasks match these filters.”
+- The initial update is appended atomically with task creation and audited as `task.update_added`; a failed create writes neither.
+- Legacy tasks with descriptions but no updates do not gain backfilled history; only new task creation is affected.
+- The standup page is shorter and its Done section remains available without dominating the review.
+
+**Status:** Implemented.
+
+---
+
+## ADR-023 — Priority visibility and task-field editing in the update card
+
+**Context:** Priority affected how work was reviewed but was invisible on the Board and Table. The shared update card exposed only status and Blocked by, so changing an owner or priority meant leaving the card. The New project dialog also carried a description field that was not surfaced anywhere after creation, and its action was visually smaller than Standup and New task.
+
+**Decision:**
+
+1. **Priority is visible in both presentations.** Board cards show a compact priority badge in the top-right; Table gains a dedicated Priority column between Status and Blocked By.
+2. **Status, Owner and Priority share one row.** The update card places these controls side by side above Save update. Owner is editable for managers and read-only for employees (who cannot reassign tasks); priority is editable by anyone who can edit the task.
+3. **One task patch, then the update.** Owner, priority, Blocked by and a status-only change are bundled into one version-checked Task patch. A progress update remains an append-only record and can carry the status change atomically when no other task field is being patched.
+4. **New project stays lightweight.** Remove the project Description input from the New project dialog; the project still has a name, owner and members. The New project action uses the same standard button height and font as Standup and New task.
+
+**Consequences:**
+
+- Priority labels use the existing compact status-like treatment rather than a new chrome-heavy control.
+- Owner/priority changes participate in the same 409/load-latest recovery as other task fields.
+- Project descriptions remain supported by the project API for existing data/future surfaces, but there is no active authoring field.
+- The standard button size keeps the three Tasks header actions visually consistent; mobile uses the same height/font with an icon-only New project label.
+
+**Status:** Implemented.

@@ -1,18 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { api, getDevUser, setDevUser } from './api'
+import { api } from './api'
 import { setBusinessDate } from './format'
-import type { Me, User } from './types'
+import type { Me } from './types'
 
 interface AuthValue {
   me: Me | null
-  users: User[]
   mode: string
   loading: boolean
   error: string | null
   isManager: boolean
   refresh: () => void
-  switchUser: (email: string) => void
-  currentIdentity: string
 }
 
 const AuthContext = createContext<AuthValue | null>(null)
@@ -20,11 +17,9 @@ const AuthContext = createContext<AuthValue | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState('dev')
   const [me, setMe] = useState<Me | null>(null)
-  const [users, setUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
-  const [identity, setIdentity] = useState(getDevUser())
 
   useEffect(() => {
     api
@@ -39,14 +34,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then((meta) => setBusinessDate(meta.business_date))
       .catch(() => setBusinessDate(null))
   }, [])
-
-  useEffect(() => {
-    if (mode !== 'dev') return
-    api
-      .get<User[]>('/auth/dev-users')
-      .then(setUsers)
-      .catch(() => setUsers([]))
-  }, [mode])
 
   useEffect(() => {
     let alive = true
@@ -70,35 +57,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [nonce, mode])
 
-  useEffect(() => {
-    const handler = () => {
-      setIdentity(getDevUser())
-      setNonce((value) => value + 1)
-    }
-    window.addEventListener('nex:identity', handler)
-    return () => window.removeEventListener('nex:identity', handler)
-  }, [])
-
-  const switchUser = useCallback((email: string) => {
-    setDevUser(email)
-    setIdentity(email)
-  }, [])
-
   const refresh = useCallback(() => setNonce((value) => value + 1), [])
 
   const value = useMemo<AuthValue>(
     () => ({
       me,
-      users,
       mode,
       loading,
       error,
       isManager: Boolean(me?.is_manager || me?.role === 'admin'),
       refresh,
-      switchUser,
-      currentIdentity: identity,
     }),
-    [me, users, mode, loading, error, refresh, switchUser, identity],
+    [me, mode, loading, error, refresh],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

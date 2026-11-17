@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from app.models import utcnow
 
-def test_employee_today_merges_task_exceptions_and_keeps_taskless_items(
+
+def test_employee_checkin_is_deduplicated_and_keeps_taskless_items(
     client: TestClient, team, previous_standup
 ):
     blocker = client.post(
@@ -26,51 +28,85 @@ def test_employee_today_merges_task_exceptions_and_keeps_taskless_items(
     body = today.json()
 
     dashboard_rows = [
-        item for item in body["attention"]["items"] if item["task_id"] == team.dashboard.id
+        item for item in body["checkin"]["items"] if item["id"] == team.dashboard.id
     ]
     assert len(dashboard_rows) == 1
-    assert {"blocker", "follow_up"} <= set(dashboard_rows[0]["reasons"])
+    # Legacy blockers/actions are stored but no longer drive active attention.
+    assert dashboard_rows[0]["reasons"] == []
+    assert dashboard_rows[0]["open_blockers"] == []
+    assert dashboard_rows[0]["open_action_items"] == []
+    assert dashboard_rows[0]["is_blocked"] is False
 
-    kinds = [(item["kind"], item["id"]) for item in body["attention"]["items"]]
-    assert ("blocker", blocker.json()["id"]) in kinds
-    assert ("action_item", action.json()["id"]) in kinds
+    # Taskless commitments no longer appear in the active check-in projection.
+    assert body["other_commitments"] == []
 
-    # Completed and backlog work is not in the daily current-work preview.
-    current_ids = {task["id"] for task in body["current_work"]["items"]}
-    assert team.dashboard.id in current_ids
-    assert team.done.id not in current_ids
-    assert team.backlog.id not in current_ids
+    checkin_ids = {task["id"] for task in body["checkin"]["items"]}
+    assert team.dashboard.id in checkin_ids
+    assert team.overdue.id in checkin_ids
+    assert team.backlog.id not in checkin_ids
+    assert team.done.id not in checkin_ids
+
+    # Free text controls attention regardless of due dates or legacy rows.
+    blocked = client.patch(
+        f"/api/v1/tasks/{team.overdue.id}",
+        headers=team.auth("manager"),
+        json={"blocked_by": "Waiting on finance"},
+    )
+    assert blocked.status_code == 200
+    refreshed = client.get("/api/v1/today", headers=team.auth("alice")).json()
+    overdue_row = next(
+        item for item in refreshed["checkin"]["items"] if item["id"] == team.overdue.id
+    )
+    assert overdue_row["reasons"] == ["blocked"]
+    assert overdue_row["is_blocked"] is True
+    assert refreshed["checkin"]["items"][0]["id"] == team.overdue.id
 
 
-def test_today_paginates_full_attention_set(client: TestClient, team):
-    for index in range(4):
-        client.post(
-            "/api/v1/blockers",
-            headers=team.auth("manager"),
-            json={"description": f"Team blocker {index}", "owner_id": team.alice.id},
-        )
-
+def test_checkin_paginates_the_full_relevant_set(client: TestClient, team):
     full = client.get("/api/v1/today", headers=team.auth("manager")).json()
-    total = full["attention"]["total"]
-    assert total >= 4
+    total = full["checkin"]["total"]
+    assert total >= 3
 
     page = client.get(
         "/api/v1/today",
         headers=team.auth("manager"),
-        params={"attention_limit": 2, "attention_offset": 1},
+        params={"limit": 2, "offset": 1},
     ).json()
-    assert page["attention"]["total"] == total
-    assert len(page["attention"]["items"]) == 2
+    assert page["checkin"]["total"] == total
+    assert len(page["checkin"]["items"]) == 2
+    assert page["checkin"]["offset"] == 1
 
 
-def test_manager_today_has_team_attention_and_no_personal_preview(
+def test_manager_checkin_includes_team_tasks_and_respects_owner_filter(
     client: TestClient, team
 ):
     body = client.get("/api/v1/today", headers=team.auth("manager")).json()
-    assert body["current_work"]["items"] == []
-    titles = {item["title"] for item in body["attention"]["items"]}
+    titles = {item["title"] for item in body["checkin"]["items"]}
     assert "Alpha dashboard" in titles
     assert "Overdue reconciliation" in titles
+    assert "Bob task" in titles
+    assert "Backlog idea" not in titles
+    assert body["cutoff_label"] == "Since the start of today"
+
+    bob_only = client.get(
+        "/api/v1/today",
+        headers=team.auth("manager"),
+        params={"assignee_id": team.bob.id},
+    ).json()
+    assert {item["title"] for item in bob_only["checkin"]["items"]} == {"Bob task"}
+
+
+def test_recently_completed_uses_the_previous_standup_boundary(
+    client: TestClient, team, previous_standup, db
+):
+    team.done.completed_at = utcnow()
+    db.commit()
+
+    body = client.get("/api/v1/today", headers=team.auth("manager")).json()
+    recent_ids = {task["id"] for task in body["recently_completed"]["items"]}
+    assert team.done.id in recent_ids
+    assert body["recently_completed"]["total"] >= 1
+    assert "standup" in body["cutoff_label"].lower()
 
 
 def test_today_reports_the_state_aware_standup_session(client: TestClient, team):
@@ -129,46 +165,3 @@ def test_daily_update_is_optional_upserted_and_visible_in_the_workspace(
     assert workspace["daily_update"]["next_steps"] == "Publish tomorrow."
 
 
-def test_session_outcomes_are_outcome_first(client: TestClient, team, today_session):
-    sid = today_session["id"]
-    action = client.post(
-        f"/api/v1/standups/sessions/{sid}/action-items",
-        headers=team.auth("manager"),
-        json={"description": "Send the reconciliation pack", "owner_id": team.alice.id},
-    )
-    assert action.status_code == 201
-
-    decision = client.post(
-        f"/api/v1/standups/sessions/{sid}/decisions",
-        headers=team.auth("manager"),
-        json={"description": "Publish after finance sign-off"},
-    )
-    assert decision.status_code == 201
-
-    blocker = client.post(
-        f"/api/v1/standups/sessions/{sid}/blockers",
-        headers=team.auth("manager"),
-        json={"description": "Finance has not signed off", "task_id": team.dashboard.id},
-    )
-    assert blocker.status_code == 201
-
-    outcomes = client.get(
-        f"/api/v1/standups/sessions/{sid}/outcomes", headers=team.auth("manager")
-    )
-    assert outcomes.status_code == 200, outcomes.text
-    body = outcomes.json()
-    assert any(item["id"] == action.json()["id"] for item in body["action_items"])
-    assert any(item["id"] == decision.json()["id"] for item in body["decisions"])
-    assert any(item["id"] == blocker.json()["id"] for item in body["unresolved_blockers"])
-
-    client.patch(
-        f"/api/v1/blockers/{blocker.json()['id']}/resolve",
-        headers=team.auth("manager"),
-        json={"resolution_details": "Finance signed off"},
-    )
-    refreshed = client.get(
-        f"/api/v1/standups/sessions/{sid}/outcomes", headers=team.auth("manager")
-    ).json()
-    assert not any(
-        item["id"] == blocker.json()["id"] for item in refreshed["unresolved_blockers"]
-    )

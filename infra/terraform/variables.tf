@@ -96,6 +96,12 @@ variable "bedrock_model_id" {
   default = "anthropic.claude-3-5-sonnet-20241022-v2:0"
 }
 
+variable "transcripts_processing_enabled" {
+  description = "Keep false: transcript review/processing is retired. Data is retained."
+  type        = bool
+  default     = false
+}
+
 variable "transcript_retention_days" {
   description = "S3 lifecycle expiry for transcripts; align with data governance policy."
   type        = number
